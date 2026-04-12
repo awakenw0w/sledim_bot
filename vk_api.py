@@ -153,10 +153,15 @@ async def _get_users_by_fields(vk_ids: list[int], fields: str) -> list[dict[str,
 
 
 def extract_vk_screen_name(value: str) -> str | None:
-    """Извлекает короткое имя пользователя из полной или сокращенной ссылки VK."""
+    """Извлекает короткое имя пользователя из ссылки, username, @username или числового ID."""
     raw_value = (value or "").strip()
     if not raw_value:
         return None
+
+    # Поддерживаем короткий ввод без ссылки: ID, username и @username.
+    if "://" not in raw_value and "/" not in raw_value:
+        normalized_value = raw_value.removeprefix("@").strip()
+        return normalized_value or None
 
     normalized = raw_value
     if "://" not in normalized:
@@ -185,7 +190,7 @@ def extract_vk_screen_name(value: str) -> str | None:
 
 
 async def resolve_user_by_vk_link(link: str) -> dict[str, Any] | None:
-    """Находит пользователя VK по ссылке вида vk.com/... или vk.ru/..."""
+    """Находит пользователя VK по ссылке, username, @username или числовому ID."""
     screen_name = extract_vk_screen_name(link)
     if screen_name is None:
         return None
