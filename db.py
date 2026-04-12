@@ -204,6 +204,29 @@ async def init_db() -> None:
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tg_tracked_users (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id             INTEGER NOT NULL,
+                telegram_user_id    INTEGER NOT NULL,
+                username            TEXT,
+                first_name          TEXT,
+                last_name           TEXT,
+                is_active           INTEGER NOT NULL DEFAULT 1,
+                added_at            TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(chat_id, telegram_user_id)
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tg_last_status (
+                telegram_user_id    INTEGER PRIMARY KEY,
+                status_text         TEXT,
+                last_seen_at        INTEGER,
+                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
         await _ensure_column(db, "chat_settings", "notification_mode", "TEXT NOT NULL DEFAULT 'all'")
         await _ensure_column(db, "chat_settings", "notify_name_changes", "INTEGER NOT NULL DEFAULT 1")
         await _ensure_column(db, "chat_settings", "notify_avatar_changes", "INTEGER NOT NULL DEFAULT 1")
@@ -284,6 +307,60 @@ async def add_tracked_user(chat_id: int, vk_id: int) -> bool:
         return False
 
 
+async def add_tg_tracked_user(
+    chat_id: int,
+    telegram_user_id: int,
+    username: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+) -> bool:
+    """Добавляет Telegram-пользователя в список отслеживаемых для конкретного чата."""
+    normalized_username = (username or "").strip().lstrip("@") or None
+    normalized_first_name = (first_name or "").strip() or None
+    normalized_last_name = (last_name or "").strip() or None
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_chat_settings_row(db, chat_id)
+
+        async with db.execute(
+            "SELECT id, is_active FROM tg_tracked_users WHERE chat_id = ? AND telegram_user_id = ?",
+            (chat_id, telegram_user_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if row is None:
+            await db.execute(
+                """
+                INSERT INTO tg_tracked_users (
+                    chat_id,
+                    telegram_user_id,
+                    username,
+                    first_name,
+                    last_name,
+                    is_active
+                ) VALUES (?, ?, ?, ?, ?, 1)
+                """,
+                (chat_id, telegram_user_id, normalized_username, normalized_first_name, normalized_last_name),
+            )
+            await db.commit()
+            return True
+
+        await db.execute(
+            """
+            UPDATE tg_tracked_users
+            SET
+                username = COALESCE(?, username),
+                first_name = COALESCE(?, first_name),
+                last_name = COALESCE(?, last_name),
+                is_active = 1
+            WHERE chat_id = ? AND telegram_user_id = ?
+            """,
+            (normalized_username, normalized_first_name, normalized_last_name, chat_id, telegram_user_id),
+        )
+        await db.commit()
+        return int(row[1]) == 0
+
+
 async def remove_tracked_user(chat_id: int, vk_id: int) -> bool:
     """Удаляет VK пользователя из списка отслеживаемых для данного chat_id."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -295,12 +372,40 @@ async def remove_tracked_user(chat_id: int, vk_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+async def remove_tg_tracked_user(chat_id: int, telegram_user_id: int) -> bool:
+    """Удаляет Telegram-пользователя из списка отслеживаемых для данного чата."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM tg_tracked_users WHERE chat_id = ? AND telegram_user_id = ?",
+            (chat_id, telegram_user_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
 async def get_tracked_users(chat_id: int) -> list[int]:
     """Возвращает список активно отслеживаемых VK ID для данного chat_id."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT vk_id FROM tracked_users WHERE chat_id = ? AND is_active = 1 ORDER BY vk_id",
             (chat_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    return [row[0] for row in rows]
+
+
+async def get_tg_tracked_users(chat_id: int) -> list[int]:
+    """Возвращает список активно отслеживаемых Telegram user id для данного chat_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT telegram_user_id
+            FROM tg_tracked_users
+            WHERE chat_id = ? AND is_active = 1
+            ORDER BY COALESCE(first_name, ''), COALESCE(last_name, ''), telegram_user_id
+            """,
+            (chat_id,),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -497,6 +602,103 @@ async def get_tracked_users_details(chat_id: int, active_only: bool = True) -> l
     ]
 
 
+async def get_tg_tracked_user_detail(chat_id: int, telegram_user_id: int) -> dict | None:
+    """Возвращает данные по одному отслеживаемому Telegram-пользователю в конкретном чате."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT
+                t.id,
+                t.chat_id,
+                t.telegram_user_id,
+                t.username,
+                t.first_name,
+                t.last_name,
+                t.is_active,
+                t.added_at,
+                s.status_text,
+                s.last_seen_at,
+                s.updated_at
+            FROM tg_tracked_users AS t
+            LEFT JOIN tg_last_status AS s ON s.telegram_user_id = t.telegram_user_id
+            WHERE t.chat_id = ? AND t.telegram_user_id = ?
+            LIMIT 1
+            """,
+            (chat_id, telegram_user_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "chat_id": row[1],
+        "telegram_user_id": row[2],
+        "username": row[3],
+        "first_name": row[4],
+        "last_name": row[5],
+        "is_active": row[6],
+        "added_at": row[7],
+        "status_text": row[8],
+        "last_seen_at": row[9],
+        "status_updated_at": row[10],
+    }
+
+
+async def get_tg_tracked_users_details(chat_id: int, active_only: bool = True) -> list[dict]:
+    """Возвращает список отслеживаемых Telegram-пользователей чата с базовыми данными."""
+    query = """
+        SELECT
+            t.id,
+            t.chat_id,
+            t.telegram_user_id,
+            t.username,
+            t.first_name,
+            t.last_name,
+            t.is_active,
+            t.added_at,
+            s.status_text,
+            s.last_seen_at,
+            s.updated_at
+        FROM tg_tracked_users AS t
+        LEFT JOIN tg_last_status AS s ON s.telegram_user_id = t.telegram_user_id
+        WHERE t.chat_id = ?
+    """
+    params: list[int] = [chat_id]
+    if active_only:
+        query += " AND t.is_active = 1"
+
+    query += """
+        ORDER BY
+            COALESCE(t.first_name, ''),
+            COALESCE(t.last_name, ''),
+            COALESCE(t.username, ''),
+            t.telegram_user_id
+    """
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "chat_id": row[1],
+            "telegram_user_id": row[2],
+            "username": row[3],
+            "first_name": row[4],
+            "last_name": row[5],
+            "is_active": row[6],
+            "added_at": row[7],
+            "status_text": row[8],
+            "last_seen_at": row[9],
+            "status_updated_at": row[10],
+        }
+        for row in rows
+    ]
+
+
 async def set_tracking_active(chat_id: int, is_active: bool) -> None:
     """Включает или выключает отслеживание для всех VK ID данного chat_id."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -517,6 +719,24 @@ async def is_tracking_active(chat_id: int) -> bool:
             row = await cursor.fetchone()
 
     return row[0] > 0
+
+
+async def save_tg_last_status(telegram_user_id: int, status_text: str | None, last_seen_at: int | None = None) -> None:
+    """Сохраняет последний известный статус Telegram-пользователя для будущей логики."""
+    normalized_status = (status_text or "").strip() or None
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO tg_last_status (telegram_user_id, status_text, last_seen_at, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                status_text = excluded.status_text,
+                last_seen_at = excluded.last_seen_at,
+                updated_at = datetime('now')
+            """,
+            (telegram_user_id, normalized_status, last_seen_at),
+        )
+        await db.commit()
 
 
 async def get_notification_mode(chat_id: int) -> str:

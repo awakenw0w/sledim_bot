@@ -2,7 +2,13 @@
 Клавиатуры для основного кнопочного интерфейса.
 """
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    KeyboardButtonRequestUsers,
+    ReplyKeyboardMarkup,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from ui_callbacks import (
@@ -14,6 +20,8 @@ from ui_callbacks import (
     ProfileChangePeriodCallback,
     ProfileChangeTypeCallback,
     ProfileChangeUserCallback,
+    TgDeleteConfirmCallback,
+    TgUserActionCallback,
     UserActionCallback,
 )
 
@@ -33,6 +41,9 @@ BTN_NOTIFY_VK = "🔔 Настройки уведомлений [VK]"
 BTN_NOTIFY_TG = "🔔 Настройки уведомлений [TG]"
 BTN_PROFILE_CHANGES = "📝 Изменения профиля"
 BTN_HELP = "❓ Помощь"
+BTN_TG_PICK_USER = "👤 Выбрать пользователя [TG]"
+BTN_BACK = "⬅️ Назад"
+BTN_MAIN_MENU = "🏠 В главное меню"
 
 PERIOD_OPTIONS: list[tuple[str, int]] = [
     ("🗓️ 1 день", 1),
@@ -151,6 +162,28 @@ def notifications_hub_keyboard() -> InlineKeyboardMarkup:
         ]
     )
     return builder.as_markup()
+
+
+def tg_add_user_reply_keyboard() -> ReplyKeyboardMarkup:
+    request_button = KeyboardButton(
+        text=BTN_TG_PICK_USER,
+        request_users=KeyboardButtonRequestUsers(
+            request_id=1001,
+            user_is_bot=False,
+            max_quantity=1,
+            request_name=True,
+            request_username=True,
+        ),
+    )
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [request_button],
+            [KeyboardButton(text=BTN_BACK), KeyboardButton(text=BTN_MAIN_MENU)],
+        ],
+        resize_keyboard=True,
+        is_persistent=False,
+        input_field_placeholder="Введите username, @username, t.me/... или ID",
+    )
 
 
 def tracked_list_chunk_keyboard(vk_items: list[tuple[int, str]], source: str) -> InlineKeyboardMarkup:
@@ -475,4 +508,75 @@ def profile_change_result_keyboard(vk_id: int, change_key: str, source: str) -> 
             InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
         ]
     )
+    return builder.as_markup()
+
+
+def tg_tracked_list_chunk_keyboard(items: list[dict], source: str = "tg_list") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for item in items:
+        tg_id = int(item["telegram_user_id"])
+        display_name = str(item.get("display_name") or f"ID {tg_id}")
+        username = str(item.get("username") or "").strip()
+        builder.button(
+            text=f"{display_name} [TG]",
+            callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+        )
+        if username:
+            builder.button(
+                text=f"@{username} [TG]",
+                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+            )
+        builder.button(
+            text="🗑️ Удалить [TG]",
+            callback_data=TgUserActionCallback(action="delete", tg_id=tg_id, src=source).pack(),
+        )
+    builder.adjust(1)
+    builder.row(
+        *[
+            InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="tg_menu").pack()),
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_user_card_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="👤 Профиль [TG]",
+        callback_data=TgUserActionCallback(action="profile", tg_id=tg_id, src=source).pack(),
+    )
+    builder.button(
+        text="📈 Отчет по онлайну [TG]",
+        callback_data=TgUserActionCallback(action="online_report", tg_id=tg_id, src=source).pack(),
+    )
+    builder.button(
+        text="📝 Изменения профиля [TG]",
+        callback_data=TgUserActionCallback(action="profile_changes", tg_id=tg_id, src=source).pack(),
+    )
+    builder.button(
+        text="🗑️ Удалить [TG]",
+        callback_data=TgUserActionCallback(action="delete", tg_id=tg_id, src=source).pack(),
+    )
+    builder.adjust(1)
+    builder.row(
+        *[
+            InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="tg_list").pack()),
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_delete_confirm_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Да, удалить [TG]",
+        callback_data=TgDeleteConfirmCallback(tg_id=tg_id, confirm=1, src=source).pack(),
+    )
+    builder.button(
+        text="❌ Нет, отмена",
+        callback_data=TgDeleteConfirmCallback(tg_id=tg_id, confirm=0, src=source).pack(),
+    )
+    builder.adjust(1)
     return builder.as_markup()

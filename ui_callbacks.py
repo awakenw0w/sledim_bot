@@ -52,3 +52,15 @@ class ProfileChangePeriodCallback(CallbackData, prefix="pcp"):
     key: str
     days: int
     src: str
+
+
+class TgUserActionCallback(CallbackData, prefix="tgu"):
+    action: str
+    tg_id: int
+    src: str
+
+
+class TgDeleteConfirmCallback(CallbackData, prefix="tgd"):
+    tg_id: int
+    confirm: int
+    src: str

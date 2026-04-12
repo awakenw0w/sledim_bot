@@ -13,7 +13,14 @@ from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardRemove,
+    SharedUser,
+)
 
 import db
 import vk_api
@@ -27,15 +34,19 @@ from ui_callbacks import (
     ProfileChangePeriodCallback,
     ProfileChangeTypeCallback,
     ProfileChangeUserCallback,
+    TgDeleteConfirmCallback,
+    TgUserActionCallback,
     UserActionCallback,
 )
 from ui_keyboards import (
     BTN_ADD_USER_TG,
     BTN_ADD_USER,
+    BTN_BACK,
     BTN_GENERAL_REPORT,
     BTN_GENERAL_REPORT_TG,
     BTN_GENERAL_REPORT_VK,
     BTN_HELP,
+    BTN_MAIN_MENU,
     BTN_NOTIFY,
     BTN_NOTIFY_TG,
     BTN_NOTIFY_VK,
@@ -61,7 +72,11 @@ from ui_keyboards import (
     reports_hub_keyboard,
     report_period_keyboard,
     report_result_keyboard,
+    tg_add_user_reply_keyboard,
+    tg_delete_confirm_keyboard,
     tracked_list_chunk_keyboard,
+    tg_tracked_list_chunk_keyboard,
+    tg_user_card_keyboard,
     user_card_keyboard,
     user_report_menu_keyboard,
     user_picker_keyboard,
@@ -681,13 +696,121 @@ async def _show_tg_add_prompt(message: Message, state: FSMContext) -> None:
     await state.set_state(AddUserStates.waiting_for_tg_link)
     await message.answer(
         "➕ Отправьте данные пользователя Telegram [TG], которого хотите добавить.\n"
-        "Интерфейс уже подготовлен, а глубокая логика мониторинга Telegram пока не подключена.\n\n"
+        "Для надежного добавления лучше использовать кнопку выбора пользователя ниже: она передает стабильный Telegram user id.\n\n"
         "Можно отправить:\n"
         "• <code>username</code>\n"
         "• <code>@username</code>\n"
-        "• ссылку вида <code>t.me/username</code>\n\n"
-        "После получения бот честно сообщит, что TG-ветка пока работает как интерфейсный каркас.",
-        reply_markup=back_main_inline_keyboard("tg_menu"),
+        "• <code>t.me/username</code>\n"
+        "• <code>https://t.me/username</code>\n"
+        "• числовой <code>user id</code>, если он уже известен",
+        reply_markup=tg_add_user_reply_keyboard(),
+    )
+
+
+def _normalize_tg_input(raw_value: str) -> str:
+    normalized = (raw_value or "").strip()
+    for prefix in ("https://", "http://"):
+        if normalized.lower().startswith(prefix):
+            normalized = normalized[len(prefix):]
+            break
+    if normalized.lower().startswith("t.me/"):
+        normalized = normalized[5:]
+    normalized = normalized.strip().strip("/")
+    if normalized.startswith("@"):
+        normalized = normalized[1:]
+    return normalized.strip()
+
+
+def _tg_display_name(item: dict) -> str:
+    first_name = str(item.get("first_name") or "").strip()
+    last_name = str(item.get("last_name") or "").strip()
+    username = str(item.get("username") or "").strip()
+    full_name = f"{first_name} {last_name}".strip()
+    if full_name:
+        return full_name
+    if username:
+        return f"@{username}"
+    return f"ID {item['telegram_user_id']}"
+
+
+async def _save_tg_user_from_shared(message: Message, shared_user: SharedUser) -> tuple[bool, dict]:
+    telegram_user_id = int(shared_user.user_id)
+    payload = {
+        "telegram_user_id": telegram_user_id,
+        "username": (shared_user.username or "").strip() or None,
+        "first_name": (shared_user.first_name or "").strip() or None,
+        "last_name": (shared_user.last_name or "").strip() or None,
+    }
+    added = await db.add_tg_tracked_user(
+        chat_id=message.chat.id,
+        telegram_user_id=telegram_user_id,
+        username=payload["username"],
+        first_name=payload["first_name"],
+        last_name=payload["last_name"],
+    )
+    return added, payload
+
+
+async def _resolve_tg_user_from_input(message: Message, raw_value: str) -> tuple[dict | None, str | None]:
+    normalized = _normalize_tg_input(raw_value)
+    if not normalized:
+        return None, "Нужно отправить username, @username, ссылку <code>t.me/...</code> или числовой Telegram user id."
+
+    if normalized.isdigit():
+        telegram_user_id = int(normalized)
+        try:
+            chat = await message.bot.get_chat(telegram_user_id)
+        except TelegramBadRequest:
+            return None, (
+                "Не удалось найти Telegram-пользователя по этому ID.\n"
+                "Проверьте значение или используйте кнопку выбора пользователя [TG]."
+            )
+        if chat.type != "private":
+            return None, "Указанный объект найден, но это не пользователь Telegram."
+        return {
+            "telegram_user_id": int(chat.id),
+            "username": (chat.username or "").strip() or None,
+            "first_name": (chat.first_name or "").strip() or None,
+            "last_name": (chat.last_name or "").strip() or None,
+        }, None
+
+    # Telegram Bot API не всегда позволяет получить user id по произвольному username,
+    # поэтому честно пробуем запрос и при неуспехе просим выбрать пользователя кнопкой.
+    try:
+        chat = await message.bot.get_chat(f"@{normalized}")
+    except TelegramBadRequest:
+        return None, (
+            "Не удалось получить Telegram-пользователя по username.\n"
+            "Используйте кнопку выбора пользователя [TG] или отправьте числовой user id, если он известен."
+        )
+
+    if chat.type != "private":
+        return None, "Указанный объект найден, но это не пользователь Telegram."
+
+    return {
+        "telegram_user_id": int(chat.id),
+        "username": (chat.username or "").strip() or None,
+        "first_name": (chat.first_name or "").strip() or None,
+        "last_name": (chat.last_name or "").strip() or None,
+    }, None
+
+
+async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
+    added = await db.add_tg_tracked_user(
+        chat_id=message.chat.id,
+        telegram_user_id=int(tg_user["telegram_user_id"]),
+        username=tg_user.get("username"),
+        first_name=tg_user.get("first_name"),
+        last_name=tg_user.get("last_name"),
+    )
+    display_name = _tg_display_name(tg_user)
+    username = str(tg_user.get("username") or "").strip()
+    username_line = f"\nUsername: <code>@{_escape_html(username)}</code>" if username else ""
+    result_prefix = "Добавлен" if added else "Пользователь уже отслеживается, данные обновлены"
+    await message.answer(
+        f"🟨 {result_prefix}: <b>{_escape_html(display_name)}</b>\n"
+        f"ID: <code>{tg_user['telegram_user_id']}</code>{username_line}",
+        reply_markup=main_menu_keyboard(),
     )
 
 
@@ -866,6 +989,85 @@ async def _show_tg_placeholder(message: Message, title: str, back_target: str = 
         "Telegram-ветка уже добавлена в интерфейс и навигацию, но глубокая логика мониторинга пока не реализована.\n"
         "Здесь не показываются вымышленные данные: этот экран служит честной заглушкой под будущую TG-логику.",
         reply_markup=back_main_inline_keyboard(back_target),
+    )
+
+
+async def _show_tg_tracked_users_screen(message: Message) -> None:
+    tg_users = await db.get_tg_tracked_users_details(message.chat.id)
+    if not tg_users:
+        await message.answer(
+            "📋 Список отслеживаемых пользователей [TG] пуст.\n"
+            "Добавьте пользователя через кнопку «Добавить пользователя [TG]».",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    formatted_items: list[dict] = []
+    for item in tg_users:
+        display_name = _tg_display_name(item)
+        username = str(item.get("username") or "").strip()
+        lines = [
+            f"👤 <b>{_escape_html(display_name)}</b>",
+            f"ID: <code>{item['telegram_user_id']}</code>",
+        ]
+        if username:
+            lines.append(f"Username: <code>@{_escape_html(username)}</code>")
+        lines.append(f"Добавлен: {_format_added_at(item.get('added_at'))}")
+        formatted_items.append({**item, "display_name": display_name, "text": "\n".join(lines)})
+
+    for start in range(0, len(formatted_items), 5):
+        chunk = formatted_items[start:start + 5]
+        text = "<b>📋 Список отслеживаемых пользователей [TG]</b>\n\n" + "\n\n".join(
+            item["text"] for item in chunk
+        )
+        await message.answer(
+            text,
+            reply_markup=tg_tracked_list_chunk_keyboard(chunk),
+        )
+
+
+async def _show_tg_user_card(message: Message, telegram_user_id: int, source: str = "tg_list") -> None:
+    detail = await db.get_tg_tracked_user_detail(message.chat.id, telegram_user_id)
+    if detail is None:
+        await message.answer(
+            "⚠️ Telegram-пользователь не найден в списке отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    display_name = _tg_display_name(detail)
+    username = str(detail.get("username") or "").strip()
+    status_text = str(detail.get("status_text") or "").strip() or "Статус еще не зафиксирован."
+    lines = [
+        f"👤 <b>{_escape_html(display_name)}</b>",
+        f"ID: <code>{detail['telegram_user_id']}</code>",
+        f"Имя: {_escape_html(str(detail.get('first_name') or 'не указано'))}",
+        f"Фамилия: {_escape_html(str(detail.get('last_name') or 'не указано'))}",
+        f"Username: <code>{_escape_html('@' + username if username else 'не указан')}</code>",
+        f"Добавлен: {_format_added_at(detail.get('added_at'))}",
+        f"Текущий статус: {_escape_html(status_text)}",
+    ]
+    if detail.get("last_seen_at"):
+        lines.append(f"Последнее обновление статуса: {vk_api.format_timestamp(int(detail['last_seen_at']))}")
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=tg_user_card_keyboard(telegram_user_id, source),
+    )
+
+
+async def _show_tg_delete_confirmation(message: Message, telegram_user_id: int, source: str) -> None:
+    detail = await db.get_tg_tracked_user_detail(message.chat.id, telegram_user_id)
+    if detail is None:
+        await message.answer(
+            "Telegram-пользователь уже отсутствует в списке отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(
+        f"🗑️ Удалить Telegram-пользователя <b>{_escape_html(_tg_display_name(detail))}</b> из отслеживания?",
+        reply_markup=tg_delete_confirm_keyboard(telegram_user_id, source),
     )
 
 
@@ -1322,7 +1524,7 @@ async def _show_screen_by_nav_target(message: Message, target: str, state: FSMCo
         return
     if target == "tg_list":
         await state.clear()
-        await _show_tg_placeholder(message, "📋 <b>Список отслеживаемых [TG]</b>")
+        await _show_tg_tracked_users_screen(message)
         return
     if target == "tg_general_report":
         await state.clear()
@@ -1438,7 +1640,7 @@ async def menu_tracked_list(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_TRACKED_LIST_TG)
 async def menu_tracked_list_tg(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await _show_tg_placeholder(message, "📋 <b>Список отслеживаемых [TG]</b>")
+    await _show_tg_tracked_users_screen(message)
 
 
 @router.message(F.text == BTN_ONLINE_REPORT)
@@ -1633,6 +1835,39 @@ async def cb_user_action(callback: CallbackQuery, callback_data: UserActionCallb
     await _show_main_menu(callback.message)
 
 
+@router.callback_query(TgUserActionCallback.filter())
+async def cb_tg_user_action(callback: CallbackQuery, callback_data: TgUserActionCallback, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    if callback_data.action in {"card", "profile"}:
+        await _show_tg_user_card(callback.message, callback_data.tg_id, callback_data.src)
+        return
+
+    if callback_data.action == "delete":
+        await _show_tg_delete_confirmation(callback.message, callback_data.tg_id, callback_data.src)
+        return
+
+    if callback_data.action == "online_report":
+        await _show_tg_placeholder(
+            callback.message,
+            "📈 <b>Отчет по онлайну [TG]</b>\nРаздел Telegram подготовлен. Логика этого блока будет добавлена следующим этапом.",
+            back_target="tg_list",
+        )
+        return
+
+    if callback_data.action == "profile_changes":
+        await _show_tg_placeholder(
+            callback.message,
+            "📝 <b>Изменения профиля [TG]</b>\nРаздел Telegram подготовлен. Логика этого блока будет добавлена следующим этапом.",
+            back_target="tg_list",
+        )
+        return
+
+    await _show_tg_tracked_users_screen(callback.message)
+
+
 @router.callback_query(DeleteConfirmCallback.filter())
 async def cb_delete_confirm(
     callback: CallbackQuery,
@@ -1672,6 +1907,31 @@ async def cb_delete_confirm(
         await _show_online_report_user_picker(callback.message)
         return
     await _show_tracked_users_screen(callback.message)
+
+
+@router.callback_query(TgDeleteConfirmCallback.filter())
+async def cb_tg_delete_confirm(callback: CallbackQuery, callback_data: TgDeleteConfirmCallback) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    if callback_data.confirm == 0:
+        await _show_tg_user_card(callback.message, callback_data.tg_id, callback_data.src)
+        return
+
+    removed = await db.remove_tg_tracked_user(callback.message.chat.id, callback_data.tg_id)
+    if removed:
+        await callback.message.answer(
+            f"Telegram-пользователь с ID <code>{callback_data.tg_id}</code> удален из отслеживания.",
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await callback.message.answer(
+            f"Telegram-пользователь с ID <code>{callback_data.tg_id}</code> не найден в списке отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+
+    await _show_tg_tracked_users_screen(callback.message)
 
 
 @router.callback_query(PeriodSelectCallback.filter())
@@ -1777,18 +2037,54 @@ async def state_add_user(message: Message, state: FSMContext) -> None:
 @router.message(StateFilter(AddUserStates.waiting_for_tg_link), F.text)
 async def state_add_user_tg(message: Message, state: FSMContext) -> None:
     raw_value = (message.text or "").strip()
+    if raw_value == BTN_BACK:
+        await state.clear()
+        await _show_tg_menu(message)
+        return
+    if raw_value == BTN_MAIN_MENU:
+        await state.clear()
+        await _show_main_menu(message)
+        return
+
     if not raw_value:
         await message.answer(
             "Нужно отправить username, @username или ссылку на Telegram-профиль.",
-            reply_markup=back_main_inline_keyboard("tg_menu"),
+            reply_markup=tg_add_user_reply_keyboard(),
         )
         return
 
+    tg_user, error_text = await _resolve_tg_user_from_input(message, raw_value)
+    if tg_user is None:
+        await message.answer(error_text or "Не удалось обработать Telegram-пользователя.", reply_markup=tg_add_user_reply_keyboard())
+        return
+
     await state.clear()
+    await message.answer("Проверяю Telegram-пользователя...", reply_markup=ReplyKeyboardRemove())
+    await _perform_add_tg_user(message, tg_user)
+
+
+@router.message(StateFilter(AddUserStates.waiting_for_tg_link), F.users_shared)
+async def state_add_user_tg_shared(message: Message, state: FSMContext) -> None:
+    users_shared = message.users_shared
+    if users_shared is None or not users_shared.users:
+        await message.answer(
+            "Не удалось получить данные выбранного пользователя Telegram. Попробуйте еще раз.",
+            reply_markup=tg_add_user_reply_keyboard(),
+        )
+        return
+
+    shared_user = users_shared.users[0]
+    await state.clear()
+    await message.answer("Пользователь Telegram выбран. Сохраняю в отслеживание...", reply_markup=ReplyKeyboardRemove())
+    added, detail = await _save_tg_user_from_shared(message, shared_user)
+    display_name = _tg_display_name(detail)
+    username = str(detail.get("username") or "").strip()
+    username_line = f"\nUsername: <code>@{_escape_html(username)}</code>" if username else ""
+    result_prefix = "Добавлен" if added else "Пользователь уже отслеживается, данные обновлены"
     await message.answer(
-        "🟨 Telegram-пользователь принят на интерфейсном уровне.\n"
-        "Глубокая логика мониторинга Telegram пока не реализована, поэтому пользователь еще не будет добавлен в реальное отслеживание.",
-        reply_markup=back_main_inline_keyboard("tg_menu"),
+        f"🟨 {result_prefix}: <b>{_escape_html(display_name)}</b>\n"
+        f"ID: <code>{detail['telegram_user_id']}</code>{username_line}",
+        reply_markup=main_menu_keyboard(),
     )
 
 
