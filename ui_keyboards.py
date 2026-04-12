@@ -16,6 +16,7 @@ from ui_callbacks import (
     NavCallback,
     NotifyModeCallback,
     NotifyToggleCallback,
+    PageCallback,
     PeriodSelectCallback,
     ProfileChangePeriodCallback,
     ProfileChangeTypeCallback,
@@ -204,25 +205,54 @@ def tg_add_user_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def tracked_list_chunk_keyboard(vk_items: list[tuple[int, str]], source: str) -> InlineKeyboardMarkup:
+def _add_pagination_row(builder: InlineKeyboardBuilder, page: int, total_pages: int, source: str) -> None:
+    if total_pages <= 1:
+        return
+    
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(
+            text="⬅️ Пред.", 
+            callback_data=PageCallback(page=page - 1, source=source).pack()
+        ))
+    
+    nav_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
+    
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(
+            text="След. ➡️", 
+            callback_data=PageCallback(page=page + 1, source=source).pack()
+        ))
+    
+    builder.row(*nav_row)
+
+
+def tracked_list_paginated_keyboard(
+    vk_items: list[tuple[int, str]], 
+    page: int, 
+    total_pages: int, 
+    source: str
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for vk_id, name in vk_items:
         builder.row(
             *[
                 InlineKeyboardButton(
-                    text=f"👤 {name[:30]}",
+                    text=f"👤 {name[:25]}",
                     callback_data=UserActionCallback(action="card", vk_id=vk_id, src=source).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="📊 Отчет",
+                    text="📊",
                     callback_data=UserActionCallback(action="report", vk_id=vk_id, src=source).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="🗑️ Удалить",
+                    text="🗑️",
                     callback_data=UserActionCallback(action="delete", vk_id=vk_id, src=source).pack(),
                 ),
             ]
         )
+
+    _add_pagination_row(builder, page, total_pages, source)
 
     builder.row(
         *[
@@ -237,6 +267,11 @@ def tracked_list_chunk_keyboard(vk_items: list[tuple[int, str]], source: str) ->
         ]
     )
     return builder.as_markup()
+
+
+def tracked_list_chunk_keyboard(vk_items: list[tuple[int, str]], source: str) -> InlineKeyboardMarkup:
+    # Оставляем для обратной совместимости во время рефакторинга
+    return tracked_list_paginated_keyboard(vk_items, 1, 1, source)
 
 
 def user_picker_keyboard(vk_items: list[tuple[int, str]], source: str, back_target: str) -> InlineKeyboardMarkup:
@@ -529,26 +564,32 @@ def profile_change_result_keyboard(vk_id: int, change_key: str, source: str) -> 
     return builder.as_markup()
 
 
-def tg_tracked_list_chunk_keyboard(items: list[dict], source: str = "tg_list") -> InlineKeyboardMarkup:
+def tg_tracked_list_paginated_keyboard(
+    items: list[dict], 
+    page: int, 
+    total_pages: int, 
+    source: str = "tg_list"
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for item in items:
         tg_id = int(item["telegram_user_id"])
         display_name = str(item.get("display_name") or f"ID {tg_id}")
-        username = str(item.get("username") or "").strip()
-        builder.button(
-            text=f"{display_name} [TG]",
-            callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+        # В пагинированном списке отводим 1 ряд на пользователя
+        builder.row(
+            *[
+                InlineKeyboardButton(
+                    text=f"👤 {display_name[:25]} [TG]",
+                    callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🗑️",
+                    callback_data=TgUserActionCallback(action="delete", tg_id=tg_id, src=source).pack(),
+                ),
+            ]
         )
-        if username:
-            builder.button(
-                text=f"@{username} [TG]",
-                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
-            )
-        builder.button(
-            text="🗑️ Удалить [TG]",
-            callback_data=TgUserActionCallback(action="delete", tg_id=tg_id, src=source).pack(),
-        )
-    builder.adjust(1)
+
+    _add_pagination_row(builder, page, total_pages, source)
+
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="tg_menu").pack()),
@@ -556,6 +597,11 @@ def tg_tracked_list_chunk_keyboard(items: list[dict], source: str = "tg_list") -
         ]
     )
     return builder.as_markup()
+
+
+def tg_tracked_list_chunk_keyboard(items: list[dict], source: str = "tg_list") -> InlineKeyboardMarkup:
+    # Оставляем для обратной совместимости
+    return tg_tracked_list_paginated_keyboard(items, 1, 1, source)
 
 
 def tg_user_card_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:

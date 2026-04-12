@@ -92,3 +92,8 @@ class TgProfileChangePeriodCallback(CallbackData, prefix="tgr"):
     key: str
     days: int
     src: str
+
+
+class PageCallback(CallbackData, prefix="pgn"):
+    page: int
+    source: str  # e.g. "vk_list", "tg_list", "search"

@@ -472,6 +472,60 @@ async def _call_vk_api_response(method_name: str, params: dict[str, Any]) -> Any
     return data.get("response")
 
 
+async def execute(code: str) -> Any:
+    """Выполняет VKScript код через метод execute."""
+    return await _call_vk_api_response("execute", {"code": code})
+
+
+async def get_batch_profile_data(vk_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """
+    Пакетно получает данные о стенах и списках (друзья, подписчики, подписки) для нескольких VK ID.
+    Ограничение VK execute: до 25 вызовов в одном запросе.
+    Мы запрашиваем 4 типа данных на каждого пользователя, поэтому батч до 6 человек.
+    """
+    if not vk_ids:
+        return {}
+
+    # Формируем код VKScript
+    # Мы будем возвращать словарь, где ключи - строковые ID пользователей
+    # Значения - объект с полями wall, friends, followers, subscriptions
+    
+    script_parts = []
+    script_parts.append("var res = {};")
+    
+    for vid in vk_ids:
+        vid_str = str(vid)
+        # Получаем стену (последние 100 постов)
+        script_parts.append(f'res["u{vid_str}_wall"] = API.wall.get({{"owner_id": {vid_str}, "count": {WALL_POST_TRACK_LIMIT}, "filter": "owner"}});')
+        # Получаем друзей
+        script_parts.append(f'res["u{vid_str}_friends"] = API.friends.get({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_FRIENDS]}, "fields": "domain"}});')
+        # Получаем подписчиков
+        script_parts.append(f'res["u{vid_str}_followers"] = API.users.getFollowers({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_FOLLOWERS]}, "fields": "domain"}});')
+        # Получаем подписки
+        script_parts.append(f'res["u{vid_str}_subscriptions"] = API.users.getSubscriptions({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_SUBSCRIPTIONS]}, "extended": 1, "fields": "domain"}});')
+
+    script_parts.append("return res;")
+    code = "\n".join(script_parts)
+    
+    raw_response = await execute(code)
+    if not isinstance(raw_response, dict):
+        logger.error("VK execute вернул неожиданный результат для батча %s: %r", vk_ids, raw_response)
+        return {}
+
+    # Парсим результат обратно в удобную структуру
+    batch_results = {}
+    for vid in vk_ids:
+        vid_str = str(vid)
+        batch_results[vid] = {
+            "wall": raw_response.get(f"u{vid_str}_wall"),
+            "friends": raw_response.get(f"u{vid_str}_friends"),
+            "followers": raw_response.get(f"u{vid_str}_followers"),
+            "subscriptions": raw_response.get(f"u{vid_str}_subscriptions"),
+        }
+        
+    return batch_results
+
+
 def _normalize_relation_entity(item: dict[str, Any], list_type: str) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
@@ -563,35 +617,114 @@ async def _get_paginated_relation_snapshot(
                 "reason": "VK API не отдал список или список скрыт настройками приватности.",
             }
 
-        if total_count == 0:
-            total_count = _normalize_int(response_data.get("count")) or 0
-            if total_count > max_items:
-                return _too_large_relation_result(list_type, total_count)
-
-        raw_items = response_data.get(result_key, [])
-        if not isinstance(raw_items, list):
-            raw_items = []
-
-        normalized_batch = []
-        for raw_item in raw_items:
-            normalized_item = _normalize_relation_entity(raw_item, list_type)
-            if normalized_item is not None:
-                normalized_batch.append(normalized_item)
-
+        # Use helper for normalization of the batch
+        processed = _process_relation_response(response_data, list_type)
+        if not processed.get("complete") and processed.get("reason"):
+             # If too many items, abort pagination
+             if "слишком большой" in str(processed.get("reason")):
+                 return processed
+        
+        normalized_batch = processed.get("items") or []
         collected_items.extend(normalized_batch)
+        
+        if total_count == 0:
+            total_count = processed.get("count") or 0
+            
+        raw_items = response_data.get(result_key, [])
         offset += len(raw_items)
+
 
         if total_count == 0 or offset >= total_count or not raw_items:
             break
-
-    unique_items: dict[tuple[str, int], dict[str, Any]] = {}
-    for item in collected_items:
-        unique_items[(str(item["entity_type"]), int(item["entity_id"]))] = item
 
     return {
         "count": total_count,
         "items": list(unique_items.values()),
         "complete": True,
+        "reason": None,
+    }
+
+
+def _process_relation_response(response_data: Any, list_type: str, expected_count: int | None = None) -> dict[str, Any]:
+    """Обрабатывает сырой ответ VK API для списка связей (без пагинации)."""
+    if not isinstance(response_data, dict):
+        return {
+            "count": expected_count or 0,
+            "items": [],
+            "complete": False,
+            "reason": "VK API не отдал список или список скрыт настройками приватности.",
+        }
+
+    total_count = _normalize_int(response_data.get("count")) or 0
+    max_items = RELATION_LIST_LIMITS[list_type]
+    if total_count > max_items:
+        return _too_large_relation_result(list_type, total_count)
+
+    raw_items = response_data.get("items", [])
+    if not isinstance(raw_items, list):
+        if isinstance(response_data, list): # users.getSubscriptions special case
+            raw_items = response_data
+        else:
+            raw_items = []
+
+    normalized_items = []
+    for raw_item in raw_items:
+        normalized_item = _normalize_relation_entity(raw_item, list_type)
+        if normalized_item is not None:
+            normalized_items.append(normalized_item)
+
+    # Если мы получили меньше, чем total_count, значит нужно было пагинировать, 
+    # но в батче execute мы этого не делаем. Помечаем как неполный если разница существенна.
+    is_complete = len(normalized_items) >= total_count or len(normalized_items) >= RELATION_LIST_BATCH_SIZES[list_type]
+
+    return {
+        "count": total_count,
+        "items": normalized_items,
+        "complete": is_complete,
+        "reason": None if is_complete else f"Получена только первая часть списка ({len(normalized_items)} из {total_count}).",
+    }
+
+
+def _process_wall_response(response_data: Any) -> dict[str, Any]:
+    """Обрабатывает сырой ответ VK API для постов со стены."""
+    if not isinstance(response_data, dict):
+        return {
+            "count": 0,
+            "items": [],
+            "available": False,
+            "reason": "VK API не отдал стену пользователя.",
+        }
+
+    raw_items = response_data.get("items", [])
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    items: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        post_id = _normalize_int(item.get("id"))
+        owner_id = _normalize_int(item.get("owner_id"))
+        created_at = _normalize_int(item.get("date"))
+        if post_id is None or owner_id is None:
+            continue
+
+        text_value = _normalize_text(item.get("text"))
+        post_link = f"https://vk.com/wall{owner_id}_{post_id}"
+        items.append(
+            {
+                "post_id": post_id,
+                "owner_id": owner_id,
+                "created_at": created_at,
+                "text": text_value,
+                "post_link": post_link,
+            }
+        )
+
+    return {
+        "count": _normalize_int(response_data.get("count")) or len(items),
+        "items": items,
+        "available": True,
         "reason": None,
     }
 

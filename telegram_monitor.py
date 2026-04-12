@@ -28,6 +28,8 @@ from telegram_resolver import (
 logger = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
+_IS_TG_RUNNING = False
+
 ACTIVITY_KIND_RANK = {
     "unknown": 0,
     "hidden": 0,
@@ -434,34 +436,54 @@ def _build_watchers_by_tg(pairs: list[tuple[int, int]]) -> tuple[list[int], dict
 
 
 async def _check_telegram_and_notify(bot: Bot) -> None:
+    global _IS_TG_RUNNING
+    if _IS_TG_RUNNING:
+        logger.warning("Overlap protection: _check_telegram_and_notify is already running.")
+        return
+    _IS_TG_RUNNING = True
+    t0 = time.time()
+    try:
+        # Delegate to heavy inner function
+        await _do_check_telegram_and_notify(bot)
+    finally:
+        elapsed = time.time() - t0
+        _IS_TG_RUNNING = False
+        # Logging happens inside the inner function
+
+async def _do_check_telegram_and_notify(bot: Bot) -> None:
     pairs = await db.get_all_active_tg_pairs()
     if not pairs:
         return
 
     tg_ids, watchers_by_tg = _build_watchers_by_tg(pairs)
     now_ts = int(time.time())
-    notification_mode_cache: dict[int, str] = {}
-    activity_enabled_cache: dict[int, bool] = {}
-    change_settings_cache: dict[int, dict[str, bool]] = {}
+    
+    # Batch preload DB data
+    known_users_map = await db.get_multiple_tg_known_users_by_id(tg_ids)
+    last_statuses_map = await db.get_multiple_tg_last_status(tg_ids)
+    
+    # Preload all sessions
+    all_chat_user_pairs = []
+    for uid, chats in watchers_by_tg.items():
+        for cid in chats:
+            all_chat_user_pairs.append((cid, uid))
+    open_sessions_map = await db.get_multiple_tg_open_sessions(all_chat_user_pairs)
+    
+    # Preload profile changes for deduplication (only for common types)
+    # We collect all change types that might be detected
+    all_possible_change_types = list(TG_CHANGE_SETTING_KEYS.keys()) + ["activity"]
+    last_recorded_changes_map = await db.get_multiple_last_tg_profile_changes(tg_ids, all_possible_change_types)
 
-    async def _get_tg_mode(chat_id: int) -> str:
-        if chat_id not in notification_mode_cache:
-            notification_mode_cache[chat_id] = await db.get_tg_notification_mode(chat_id)
-        return notification_mode_cache[chat_id]
-
-    async def _get_tg_activity_enabled(chat_id: int) -> bool:
-        if chat_id not in activity_enabled_cache:
-            activity_enabled_cache[chat_id] = await db.get_tg_activity_notification_enabled(chat_id)
-        return activity_enabled_cache[chat_id]
-
-    async def _get_tg_change_settings(chat_id: int) -> dict[str, bool]:
-        if chat_id not in change_settings_cache:
-            change_settings_cache[chat_id] = await db.get_tg_change_notification_settings(chat_id)
-        return change_settings_cache[chat_id]
+    outbox_count_tg = 0
+    users_processed_tg = 0
+    
+    known_users_to_save = []
+    tracked_profiles_to_sync = []
+    statuses_to_save = []
 
     for telegram_user_id in tg_ids:
         related_chat_ids = watchers_by_tg.get(telegram_user_id, [])
-        known_user = await db.get_tg_known_user_by_id(telegram_user_id)
+        known_user = known_users_map.get(telegram_user_id)
 
         if known_user is None and related_chat_ids:
             seed_detail = await db.get_tg_tracked_user_detail(related_chat_ids[0], telegram_user_id)
@@ -504,14 +526,16 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
             logger.exception("Ошибка при обновлении TG user_id=%s: %s", telegram_user_id, exc)
             continue
 
-        old_status = await db.get_tg_last_status(telegram_user_id)
+        users_processed_tg += 1
+        old_status = last_statuses_map.get(telegram_user_id)
         profile_changes = _build_profile_change_records(known_user, snapshot)
         
-        # Системная дедупликация: не уведомляем и не пишем в историю, если новое значение совпадает с последним записанным
+        # Системная дедупликация
         deduplicated_changes = []
         if profile_changes:
             for change in profile_changes:
-                last_recorded = await db.get_last_tg_profile_change(telegram_user_id, change["change_type"])
+                ctype = change["change_type"]
+                last_recorded = last_recorded_changes_map.get((telegram_user_id, ctype))
                 if last_recorded and last_recorded.get("new_value") == change.get("new_value"):
                     continue
                 deduplicated_changes.append(change)
@@ -519,55 +543,53 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
         if deduplicated_changes:
             await db.add_tg_profile_changes(telegram_user_id, deduplicated_changes, now_ts)
         
-        # Обновляем состояние в любом случае, чтобы кэш был свежим
-        await db.upsert_tg_known_user(
-            telegram_user_id=int(snapshot.telegram_user_id),
-            username=snapshot.username,
-            first_name=snapshot.first_name,
-            last_name=snapshot.last_name,
-            access_hash=snapshot.access_hash,
-            profile_link=snapshot.profile_link,
-            avatar_photo_id=snapshot.avatar_photo_id,
-            avatar_dc_id=snapshot.avatar_dc_id,
-            avatar_has_video=snapshot.avatar_has_video,
-            gifts_count=snapshot.gifts_count,
-            gifts_supported=snapshot.gifts_supported,
-            is_bot=snapshot.is_bot,
-        )
-        await db.sync_tg_tracked_user_profile(
-            int(snapshot.telegram_user_id),
-            username=snapshot.username,
-            first_name=snapshot.first_name,
-            last_name=snapshot.last_name,
-        )
-        await db.save_tg_last_status(
-            telegram_user_id=int(snapshot.telegram_user_id),
-            status_text=snapshot.status_text,
-            last_seen_at=snapshot.last_seen_at,
-            is_online=snapshot.is_online,
-            status_kind=snapshot.status_kind,
-            activity_at=snapshot.activity_at,
-        )
+        # Collect updates
+        known_users_to_save.append({
+            "telegram_user_id": int(snapshot.telegram_user_id),
+            "username": snapshot.username,
+            "first_name": snapshot.first_name,
+            "last_name": snapshot.last_name,
+            "access_hash": snapshot.access_hash,
+            "profile_link": snapshot.profile_link,
+            "avatar_photo_id": snapshot.avatar_photo_id,
+            "avatar_dc_id": snapshot.avatar_dc_id,
+            "avatar_has_video": snapshot.avatar_has_video,
+            "gifts_count": snapshot.gifts_count,
+            "gifts_supported": snapshot.gifts_supported,
+            "is_bot": snapshot.is_bot,
+        })
+        tracked_profiles_to_sync.append({
+            "telegram_user_id": int(snapshot.telegram_user_id),
+            "username": snapshot.username,
+            "first_name": snapshot.first_name,
+            "last_name": snapshot.last_name,
+        })
+        statuses_to_save.append({
+            "telegram_user_id": int(snapshot.telegram_user_id),
+            "status_text": snapshot.status_text,
+            "last_seen_at": snapshot.last_seen_at,
+            "is_online": snapshot.is_online,
+            "status_kind": snapshot.status_kind,
+            "activity_at": snapshot.activity_at,
+        })
 
         for chat_id in related_chat_ids:
             try:
-                await _reconcile_tg_sessions(chat_id, snapshot, now_ts)
+                # Get session from pre-loaded map
+                open_session = open_sessions_map.get((chat_id, telegram_user_id))
+                await _reconcile_tg_sessions_batched(chat_id, snapshot, now_ts, open_session)
             except Exception as exc:
-                logger.error(
-                    "Не удалось синхронизировать TG сессию chat_id=%s, telegram_user_id=%s: %s",
-                    chat_id,
-                    telegram_user_id,
-                    exc,
-                )
+                logger.error("Не удалось синхронизировать TG сессию chat_id=%s, telegram_user_id=%s: %s", chat_id, telegram_user_id, exc)
 
         if profile_changes:
             for chat_id in related_chat_ids:
                 try:
-                    settings = await _get_tg_change_settings(chat_id)
+                    settings = await db.get_tg_change_notification_settings(chat_id)
                     filtered_changes = _filter_profile_changes_by_settings(deduplicated_changes, settings)
                     if not filtered_changes:
                         continue
                     m_hash = hashlib.md5(f"tg_profile|{chat_id}|{telegram_user_id}|{now_ts}".encode()).hexdigest()
+                    outbox_count_tg += 1
                     await db.enqueue_outbox_message(
                         source="tg",
                         chat_id=chat_id,
@@ -577,56 +599,18 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
                         disable_preview=True,
                     )
                 except Exception as exc:
-                    logger.error(
-                        "Не удалось добавить TG уведомление об изменениях профиля в очередь chat_id=%s, telegram_user_id=%s: %s",
-                        chat_id,
-                        telegram_user_id,
-                        exc,
-                    )
-
-        if old_status is None:
-            continue
-
-        online_history_record = _build_online_history_record(old_status, snapshot)
-        if online_history_record is not None:
-            # Дедупликация для статуса
-            last_online_change = await db.get_last_tg_profile_change(telegram_user_id, "online")
-            if last_online_change is None or last_online_change.get("new_value") != online_history_record.get("new_value"):
-                await db.add_tg_profile_changes(telegram_user_id, [online_history_record], now_ts)
-                notification_text = _build_status_notification(snapshot, bool(snapshot.is_online), now_ts)
-                for chat_id in related_chat_ids:
-                    try:
-                        notification_mode = await _get_tg_mode(chat_id)
-                        if not _should_send_status_notification(notification_mode, bool(snapshot.is_online)):
-                            continue
-                        m_hash = hashlib.md5(f"tg_status|{chat_id}|{telegram_user_id}|{snapshot.is_online}|{now_ts}".encode()).hexdigest()
-                        await db.enqueue_outbox_message(
-                            source="tg",
-                            chat_id=chat_id,
-                            text=notification_text,
-                            message_hash=m_hash,
-                            parse_mode="HTML",
-                            disable_preview=True,
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            "Не удалось добавить TG статус-уведомление в очередь chat_id=%s, telegram_user_id=%s: %s",
-                            chat_id,
-                            telegram_user_id,
-                            exc,
-                        )
-            continue
+                    logger.error("Ошибка при отправке уведомления об изменении TG-профиля chat_id=%s: %s", chat_id, exc)
 
         activity_history_record = _build_activity_history_record(old_status, snapshot)
         if activity_history_record is not None:
             # Дедупликация для активности
-            last_activity = await db.get_last_tg_profile_change(telegram_user_id, "activity")
+            last_activity = last_recorded_changes_map.get((telegram_user_id, "activity"))
             if last_activity is None or last_activity.get("new_value") != activity_history_record.get("new_value"):
                 await db.add_tg_profile_changes(telegram_user_id, [activity_history_record], now_ts)
                 activity_text = _build_activity_notification(snapshot, old_status, now_ts)
                 for chat_id in related_chat_ids:
                     try:
-                        if not await _get_tg_activity_enabled(chat_id):
+                        if not await db.get_tg_activity_notification_enabled(chat_id):
                             continue
                         m_hash = hashlib.md5(f"tg_activity|{chat_id}|{telegram_user_id}|{snapshot.activity_at}|{now_ts}".encode()).hexdigest()
                         await db.enqueue_outbox_message(
@@ -637,6 +621,7 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
                             parse_mode="HTML",
                             disable_preview=True,
                         )
+                        outbox_count_tg += 1
                     except Exception as exc:
                         logger.error(
                             "Не удалось добавить TG уведомление об активности в очередь chat_id=%s, telegram_user_id=%s: %s",
@@ -645,6 +630,33 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
                             exc,
                         )
 
+    # Perform batch writes at the end
+    await db.save_multiple_tg_known_users(known_users_to_save)
+    await db.sync_multiple_tg_tracked_user_profiles(tracked_profiles_to_sync)
+    await db.save_multiple_tg_last_statuses(statuses_to_save)
+
+    logger.info(
+        "[TG Monitor] Check completed for %s users in %.2fs. Outbox messages: %s",
+        users_processed_tg,
+        time.time() - t0,
+        outbox_count_tg,
+    )
+
+async def _reconcile_tg_sessions_batched(chat_id: int, snapshot, now_ts: int, open_session: dict | None) -> None:
+    telegram_user_id = int(snapshot.telegram_user_id)
+
+    if snapshot.is_online is True and open_session is None:
+        started_at = int(getattr(snapshot, "activity_at", None) or now_ts)
+        await db.start_tg_online_session(chat_id, telegram_user_id, started_at)
+        logger.debug("TG online-сессия открыта: chat_id=%s, telegram_user_id=%s, started_at=%s", chat_id, telegram_user_id, started_at)
+        return
+
+    if snapshot.is_online is False and open_session is not None:
+        ended_at = int(getattr(snapshot, "last_seen_at", None) or getattr(snapshot, "activity_at", None) or now_ts)
+        if ended_at < int(open_session["started_at"]):
+            ended_at = now_ts
+        await db.end_tg_online_session(chat_id, telegram_user_id, ended_at)
+        logger.debug("TG online-сессия закрыта: chat_id=%s, telegram_user_id=%s, ended_at=%s", chat_id, telegram_user_id, ended_at)
 
 async def run_telegram_monitor(bot: Bot) -> None:
     logger.info("Telegram-monitor запущен. Проверка статусов и профиля: раз в %s сек.", ONLINE_CHECK_INTERVAL)

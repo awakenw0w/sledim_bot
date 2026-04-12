@@ -5,6 +5,7 @@
 """
 
 import json
+from app_cache import ttl_cache, invalidate_cache
 import logging
 from contextlib import asynccontextmanager
 
@@ -570,6 +571,28 @@ async def sync_tg_tracked_user_profile(
         await db.commit()
 
 
+async def sync_multiple_tg_tracked_user_profiles(users_data: list[dict]) -> None:
+    """Пакетно синхронизирует профили TG-пользователей."""
+    if not users_data:
+        return
+    
+    data_to_update = []
+    for u in users_data:
+        uid = u["telegram_user_id"]
+        uname = (u.get("username") or "").strip().lstrip("@") or None
+        fname = (u.get("first_name") or "").strip() or None
+        lname = (u.get("last_name") or "").strip() or None
+        data_to_update.append((uname, fname, lname, uid))
+
+    async with get_db_connection() as db:
+        await db.executemany("""
+            UPDATE tg_tracked_users
+            SET username = ?, first_name = ?, last_name = ?
+            WHERE telegram_user_id = ?
+        """, data_to_update)
+        await db.commit()
+
+
 async def upsert_tg_known_user(
     telegram_user_id: int,
     username: str | None = None,
@@ -642,6 +665,56 @@ async def upsert_tg_known_user(
                 1 if is_bot else 0,
             ),
         )
+        await db.commit()
+
+
+async def save_multiple_tg_known_users(users_data: list[dict]) -> None:
+    """Пакетно сохраняет или обновляет известных Telegram-пользователей."""
+    if not users_data:
+        return
+        
+    data_to_insert = []
+    for u in users_data:
+        uid = int(u["telegram_user_id"])
+        uname = (u.get("username") or "").strip().lstrip("@") or None
+        fname = (u.get("first_name") or "").strip() or None
+        lname = (u.get("last_name") or "").strip() or None
+        access_hash = u.get("access_hash")
+        plink = (u.get("profile_link") or "").strip() or None
+        aphid = (u.get("avatar_photo_id") or "").strip() or None
+        adcid = u.get("avatar_dc_id")
+        ahvid = 1 if u.get("avatar_has_video") else 0
+        gcnt = u.get("gifts_count")
+        gsupp = None if u.get("gifts_supported") is None else (1 if u.get("gifts_supported") else 0)
+        bio = (u.get("bio") or "").strip() or None
+        is_bot = 1 if u.get("is_bot") else 0
+        
+        data_to_insert.append((
+            uid, uname, fname, lname, access_hash, plink, aphid, adcid, ahvid, gcnt, gsupp, bio, is_bot
+        ))
+
+    async with get_db_connection() as db:
+        await db.executemany("""
+            INSERT INTO tg_known_users (
+                telegram_user_id, username, first_name, last_name, access_hash,
+                profile_link, avatar_photo_id, avatar_dc_id, avatar_has_video,
+                gifts_count, gifts_supported, bio, is_bot, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                username = excluded.username,
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                access_hash = COALESCE(excluded.access_hash, tg_known_users.access_hash),
+                profile_link = excluded.profile_link,
+                avatar_photo_id = excluded.avatar_photo_id,
+                avatar_dc_id = excluded.avatar_dc_id,
+                avatar_has_video = excluded.avatar_has_video,
+                gifts_count = excluded.gifts_count,
+                gifts_supported = excluded.gifts_supported,
+                bio = excluded.bio,
+                is_bot = excluded.is_bot,
+                updated_at = datetime('now')
+        """, data_to_insert)
         await db.commit()
 
 
@@ -725,6 +798,65 @@ async def get_tg_known_user_by_id(telegram_user_id: int) -> dict | None:
             (telegram_user_id,),
         ) as cursor:
             row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "telegram_user_id": row[0],
+        "username": row[1],
+        "first_name": row[2],
+        "last_name": row[3],
+        "access_hash": row[4],
+        "profile_link": row[5],
+        "avatar_photo_id": row[6],
+        "avatar_dc_id": row[7],
+        "avatar_has_video": bool(row[8]),
+        "gifts_count": row[9],
+        "gifts_supported": None if row[10] is None else bool(row[10]),
+        "bio": row[11],
+        "is_bot": bool(row[12]),
+        "updated_at": row[13],
+    }
+
+
+async def get_multiple_tg_known_users_by_id(telegram_user_ids: list[int]) -> dict[int, dict]:
+    """Возвращает маппинг известных Telegram-пользователей по их id пакетом."""
+    if not telegram_user_ids:
+        return {}
+        
+    placeholders = ",".join("?" * len(telegram_user_ids))
+    result = {}
+    async with get_db_connection() as db:
+        async with db.execute(f"""
+            SELECT
+                telegram_user_id, username, first_name, last_name, access_hash,
+                profile_link, avatar_photo_id, avatar_dc_id, avatar_has_video,
+                gifts_count, gifts_supported, bio, is_bot, updated_at
+            FROM tg_known_users
+            WHERE telegram_user_id IN ({placeholders})
+        """, telegram_user_ids) as cursor:
+            rows = await cursor.fetchall()
+            
+    for row in rows:
+        uid = row[0]
+        result[uid] = {
+            "telegram_user_id": uid,
+            "username": row[1],
+            "first_name": row[2],
+            "last_name": row[3],
+            "access_hash": row[4],
+            "profile_link": row[5],
+            "avatar_photo_id": row[6],
+            "avatar_dc_id": row[7],
+            "avatar_has_video": bool(row[8]),
+            "gifts_count": row[9],
+            "gifts_supported": None if row[10] is None else bool(row[10]),
+            "bio": row[11],
+            "is_bot": bool(row[12]),
+            "updated_at": row[13],
+        }
+    return result
 
     if row is None:
         return None
@@ -1195,6 +1327,65 @@ async def get_tg_last_status(telegram_user_id: int) -> dict | None:
     }
 
 
+async def get_multiple_tg_last_status(telegram_user_ids: list[int]) -> dict[int, dict]:
+    """Возвращает маппинг последних статусов для списка Telegram ID пакетом."""
+    if not telegram_user_ids:
+        return {}
+        
+    placeholders = ",".join("?" * len(telegram_user_ids))
+    result = {}
+    async with get_db_connection() as db:
+        async with db.execute(f"""
+            SELECT telegram_user_id, status_text, last_seen_at, is_online, status_kind, activity_at, updated_at
+            FROM tg_last_status
+            WHERE telegram_user_id IN ({placeholders})
+        """, telegram_user_ids) as cursor:
+            rows = await cursor.fetchall()
+
+    for row in rows:
+        uid = row[0]
+        result[uid] = {
+            "status_text": row[1],
+            "last_seen_at": row[2],
+            "is_online": None if row[3] is None else bool(row[3]),
+            "status_kind": row[4],
+            "activity_at": row[5],
+            "updated_at": row[6],
+        }
+    return result
+
+
+async def save_multiple_tg_last_statuses(statuses_data: list[dict]) -> None:
+    """Пакетно сохраняет последние статусы Telegram-пользователей."""
+    if not statuses_data:
+        return
+        
+    data_to_insert = []
+    for s in statuses_data:
+        uid = int(s["telegram_user_id"])
+        stext = (s.get("status_text") or "").strip() or None
+        lsat = s.get("last_seen_at")
+        ison = None if s.get("is_online") is None else (1 if s["is_online"] else 0)
+        skind = (s.get("status_kind") or "").strip() or None
+        acat = s.get("activity_at")
+        data_to_insert.append((uid, stext, lsat, ison, skind, acat))
+
+    async with get_db_connection() as db:
+        await db.executemany("""
+            INSERT INTO tg_last_status (
+                telegram_user_id, status_text, last_seen_at, is_online, status_kind, activity_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                status_text = excluded.status_text,
+                last_seen_at = excluded.last_seen_at,
+                is_online = excluded.is_online,
+                status_kind = excluded.status_kind,
+                activity_at = excluded.activity_at,
+                updated_at = datetime('now')
+        """, data_to_insert)
+        await db.commit()
+
+
 async def save_tg_last_status(
     telegram_user_id: int,
     status_text: str | None,
@@ -1242,6 +1433,7 @@ async def save_tg_last_status(
         await db.commit()
 
 
+@ttl_cache(ttl_seconds=60)
 async def get_notification_mode(chat_id: int) -> str:
     """Возвращает режим уведомлений для чата."""
     async with get_db_connection() as db:
@@ -1273,9 +1465,11 @@ async def set_notification_mode(chat_id: int, mode: str) -> str:
         """, (normalized_mode, chat_id))
         await db.commit()
 
+    invalidate_cache(get_notification_mode, chat_id)
     return normalized_mode
 
 
+@ttl_cache(ttl_seconds=60)
 async def get_tg_notification_mode(chat_id: int) -> str:
     """Возвращает режим TG-уведомлений для чата."""
     async with get_db_connection() as db:
@@ -1310,9 +1504,11 @@ async def set_tg_notification_mode(chat_id: int, mode: str) -> str:
         )
         await db.commit()
 
+    invalidate_cache(get_tg_notification_mode, chat_id)
     return normalized_mode
 
 
+@ttl_cache(ttl_seconds=60)
 async def get_tg_activity_notification_enabled(chat_id: int) -> bool:
     """Возвращает, включены ли уведомления об activity / last seen для TG."""
     async with get_db_connection() as db:
@@ -1343,6 +1539,7 @@ async def set_tg_activity_notification_enabled(chat_id: int, enabled: bool) -> b
         )
         await db.commit()
 
+    invalidate_cache(get_tg_activity_notification_enabled, chat_id)
     return enabled
 
 
@@ -1351,9 +1548,11 @@ async def toggle_tg_activity_notification(chat_id: int) -> bool:
     current_value = await get_tg_activity_notification_enabled(chat_id)
     new_value = not current_value
     await set_tg_activity_notification_enabled(chat_id, new_value)
+    invalidate_cache(get_tg_activity_notification_enabled, chat_id)
     return new_value
 
 
+@ttl_cache(ttl_seconds=60)
 async def get_tg_change_notification_settings(chat_id: int) -> dict[str, bool]:
     """Возвращает настройки TG-уведомлений по изменениям профиля."""
     select_columns = ", ".join(TG_CHANGE_NOTIFICATION_COLUMNS.values())
@@ -1395,6 +1594,7 @@ async def set_tg_change_notification_enabled(chat_id: int, key: str, enabled: bo
         )
         await db.commit()
 
+    invalidate_cache(get_tg_change_notification_settings, chat_id)
     return enabled
 
 
@@ -1407,9 +1607,11 @@ async def toggle_tg_change_notification(chat_id: int, key: str) -> bool:
 
     new_value = not bool(current_settings[normalized_key])
     await set_tg_change_notification_enabled(chat_id, normalized_key, new_value)
+    invalidate_cache(get_tg_change_notification_settings, chat_id)
     return new_value
 
 
+@ttl_cache(ttl_seconds=60)
 async def get_change_notification_settings(chat_id: int) -> dict[str, bool]:
     """Возвращает настройки уведомлений по не-онлайн изменениям профиля."""
     select_columns = ", ".join(CHANGE_NOTIFICATION_COLUMNS.values())
@@ -1451,6 +1653,7 @@ async def set_change_notification_enabled(chat_id: int, key: str, enabled: bool)
         )
         await db.commit()
 
+    invalidate_cache(get_change_notification_settings, chat_id)
     return enabled
 
 
@@ -1463,6 +1666,7 @@ async def toggle_change_notification(chat_id: int, key: str) -> bool:
 
     new_value = not bool(current_settings[normalized_key])
     await set_change_notification_enabled(chat_id, normalized_key, new_value)
+    invalidate_cache(get_change_notification_settings, chat_id)
     return new_value
 
 
@@ -1506,6 +1710,55 @@ async def save_last_status(
                 last_name  = excluded.last_name,
                 updated_at = excluded.updated_at
         """, (vk_id, online, last_seen, first_name, last_name))
+        await db.commit()
+
+
+async def get_multiple_last_status(vk_ids: list[int]) -> dict[int, dict]:
+    """Возвращает маппинг last_status для списка VK ID пакетом."""
+    if not vk_ids:
+        return {}
+    
+    placeholders = ",".join("?" * len(vk_ids))
+    result = {}
+    async with get_db_connection() as db:
+        async with db.execute(f"""
+            SELECT vk_id, online, last_seen, first_name, last_name
+            FROM last_status
+            WHERE vk_id IN ({placeholders})
+        """, vk_ids) as cursor:
+            rows = await cursor.fetchall()
+
+    for row in rows:
+        result[row[0]] = {
+            "online": row[1],
+            "last_seen": row[2],
+            "first_name": row[3],
+            "last_name": row[4],
+        }
+    return result
+
+
+async def save_multiple_last_statuses(statuses: list[dict]) -> None:
+    """Сохраняет пачку last_status за 1 SQL запрос."""
+    if not statuses:
+        return
+        
+    data_to_insert = [
+        (s["vk_id"], s["online"], s["last_seen"], s.get("first_name", ""), s.get("last_name", ""))
+        for s in statuses
+    ]
+
+    async with get_db_connection() as db:
+        await db.executemany("""
+            INSERT INTO last_status (vk_id, online, last_seen, first_name, last_name, updated_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(vk_id) DO UPDATE SET
+                online     = excluded.online,
+                last_seen  = excluded.last_seen,
+                first_name = excluded.first_name,
+                last_name  = excluded.last_name,
+                updated_at = excluded.updated_at
+        """, data_to_insert)
         await db.commit()
 
 
@@ -1559,6 +1812,67 @@ async def save_profile_cache(vk_id: int, profile_data: dict) -> None:
                 {update_clause},
                 updated_at = excluded.updated_at
         """, values)
+        await db.commit()
+
+
+async def get_multiple_profile_caches(vk_ids: list[int]) -> dict[int, dict]:
+    """Возвращает маппинг кэшей для списка VK ID."""
+    if not vk_ids:
+        return {}
+    
+    placeholders = ",".join("?" * len(vk_ids))
+    result = {}
+    async with get_db_connection() as db:
+        async with db.execute(f"""
+            SELECT vk_id, {", ".join(PROFILE_CACHE_FIELDS)}, updated_at
+            FROM profile_cache
+            WHERE vk_id IN ({placeholders})
+        """, vk_ids) as cursor:
+            rows = await cursor.fetchall()
+            
+    for row in rows:
+        vk_id = row[0]
+        cache_dict = {"vk_id": vk_id}
+        for index, field_name in enumerate(PROFILE_CACHE_FIELDS, start=1):
+            cache_dict[field_name] = row[index]
+        cache_dict["updated_at"] = row[len(PROFILE_CACHE_FIELDS) + 1]
+        result[vk_id] = cache_dict
+    return result
+
+
+async def save_multiple_profile_caches(profiles_data_map: dict[int, dict]) -> None:
+    """Пакетное сохранение профиль-кэшей."""
+    if not profiles_data_map:
+        return
+        
+    vk_ids = list(profiles_data_map.keys())
+    existing_caches = await get_multiple_profile_caches(vk_ids)
+    
+    data_to_insert = []
+    for vk_id, profile_data in profiles_data_map.items():
+        existing = existing_caches.get(vk_id)
+        merged = {field_name: None for field_name in PROFILE_CACHE_FIELDS}
+        if existing is not None:
+            for field_name in PROFILE_CACHE_FIELDS:
+                merged[field_name] = existing.get(field_name)
+
+        for field_name in PROFILE_CACHE_FIELDS:
+            if field_name in profile_data:
+                merged[field_name] = profile_data.get(field_name)
+
+        values = [vk_id] + [merged[field_name] for field_name in PROFILE_CACHE_FIELDS]
+        data_to_insert.append(values)
+        
+    update_clause = ", ".join(f"{field_name} = excluded.{field_name}" for field_name in PROFILE_CACHE_FIELDS)
+    
+    async with get_db_connection() as db:
+        await db.executemany(f"""
+            INSERT INTO profile_cache (vk_id, {", ".join(PROFILE_CACHE_FIELDS)}, updated_at)
+            VALUES ({", ".join("?" for _ in range(len(PROFILE_CACHE_FIELDS) + 1))}, datetime('now'))
+            ON CONFLICT(vk_id) DO UPDATE SET
+                {update_clause},
+                updated_at = excluded.updated_at
+        """, data_to_insert)
         await db.commit()
 
 
@@ -1931,6 +2245,36 @@ async def get_last_tg_profile_change(telegram_user_id: int, change_type: str) ->
     }
 
 
+async def get_multiple_last_tg_profile_changes(telegram_user_ids: list[int], change_types: list[str]) -> dict[tuple[int, str], dict]:
+    """Возвращает маппинг последних изменений для списка TG-пользователей и типов изменений."""
+    if not telegram_user_ids or not change_types:
+        return {}
+        
+    id_placeholders = ",".join("?" * len(telegram_user_ids))
+    type_placeholders = ",".join("?" * len(change_types))
+    
+    result = {}
+    async with get_db_connection() as db:
+        async with db.execute(f"""
+            SELECT telegram_user_id, change_type, old_value, new_value, changed_at
+            FROM (
+                SELECT telegram_user_id, change_type, old_value, new_value, changed_at,
+                       ROW_NUMBER() OVER (PARTITION BY telegram_user_id, change_type ORDER BY changed_at DESC) as rn
+                FROM tg_profile_change_history
+                WHERE telegram_user_id IN ({id_placeholders}) AND change_type IN ({type_placeholders})
+            ) WHERE rn = 1
+        """, telegram_user_ids + change_types) as cursor:
+            rows = await cursor.fetchall()
+
+    for row in rows:
+        result[(row[0], row[1])] = {
+            "old_value": row[2],
+            "new_value": row[3],
+            "changed_at": row[4],
+        }
+    return result
+
+
 async def add_tg_profile_changes(telegram_user_id: int, changes: list[dict], changed_at: int) -> None:
     """Пишет изменения TG-профиля в историю (с дедупликацией)."""
     if not changes:
@@ -2050,6 +2394,34 @@ async def get_tg_open_session(chat_id: int, telegram_user_id: int) -> dict | Non
         "id": row[0],
         "started_at": row[1],
     }
+
+
+async def get_multiple_tg_open_sessions(chats_users: list[tuple[int, int]]) -> dict[tuple[int, int], dict]:
+    """Пакетно возвращает текущие незакрытые TG онлайн-сессии для списка пар (chat_id, telegram_user_id)."""
+    if not chats_users:
+        return {}
+        
+    # Формируем цепочку условий (chat_id = ? AND telegram_user_id = ?) OR ...
+    conditions = " OR ".join(["(chat_id = ? AND telegram_user_id = ?)" for _ in chats_users])
+    params = []
+    for chat_id, uid in chats_users:
+        params.extend([chat_id, uid])
+        
+    result = {}
+    async with get_db_connection() as db:
+        async with db.execute(f"""
+            SELECT id, chat_id, telegram_user_id, started_at
+            FROM tg_online_sessions
+            WHERE ({conditions}) AND ended_at IS NULL
+        """, params) as cursor:
+            rows = await cursor.fetchall()
+            
+    for row in rows:
+        result[(row[1], row[2])] = {
+            "id": row[0],
+            "started_at": row[3],
+        }
+    return result
 
 
 async def start_tg_online_session(chat_id: int, telegram_user_id: int, started_at: int) -> int:
