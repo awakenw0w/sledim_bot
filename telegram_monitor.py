@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import html
 import logging
-import time
+import time as time_mod
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
@@ -441,22 +441,23 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
         logger.warning("Overlap protection: _check_telegram_and_notify is already running.")
         return
     _IS_TG_RUNNING = True
-    t0 = time.time()
+    t0 = time_mod.time()
     try:
         # Delegate to heavy inner function
         await _do_check_telegram_and_notify(bot)
     finally:
-        elapsed = time.time() - t0
+        elapsed = time_mod.time() - t0
         _IS_TG_RUNNING = False
         # Logging happens inside the inner function
 
 async def _do_check_telegram_and_notify(bot: Bot) -> None:
+    t0 = time_mod.time()
     pairs = await db.get_all_active_tg_pairs()
     if not pairs:
         return
 
     tg_ids, watchers_by_tg = _build_watchers_by_tg(pairs)
-    now_ts = int(time.time())
+    now_ts = int(time_mod.time())
     
     # Batch preload DB data
     known_users_map = await db.get_multiple_tg_known_users_by_id(tg_ids)
@@ -638,7 +639,7 @@ async def _do_check_telegram_and_notify(bot: Bot) -> None:
     logger.info(
         "[TG Monitor] Check completed for %s users in %.2fs. Outbox messages: %s",
         users_processed_tg,
-        time.time() - t0,
+        time_mod.time() - t0,
         outbox_count_tg,
     )
 

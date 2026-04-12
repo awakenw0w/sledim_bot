@@ -8,7 +8,8 @@ import asyncio
 import hashlib
 import html
 import logging
-import time
+import time as time_mod
+from datetime import datetime, timezone, timedelta
 
 from aiogram import Bot
 
@@ -658,7 +659,7 @@ async def _check_online_and_notify(bot: Bot) -> None:
         logger.warning("Overlap protection: _check_online_and_notify is already running.")
         return
     _IS_ONLINE_RUNNING = True
-    t0 = time.time()
+    t0 = time_mod.time()
     
     try:
         pairs = await db.get_all_active_pairs()
@@ -671,7 +672,7 @@ async def _check_online_and_notify(bot: Bot) -> None:
             logger.warning("VK API не ответил, пропускаем цикл онлайн-проверки")
             return
 
-        now_ts = int(time.time())
+        now_ts = int(time_mod.time())
         last_known_statuses = await db.get_multiple_last_status(vk_ids)
         statuses_to_save = []
         outbox_count = 0
@@ -733,7 +734,7 @@ async def _check_online_and_notify(bot: Bot) -> None:
 
         await db.save_multiple_last_statuses(statuses_to_save)
         
-        elapsed = time.time() - t0
+        elapsed = time_mod.time() - t0
         logger.info("[VK Tracker] Online check completed for %s users in %.2fs. Outbox messages: %s", len(users_data), elapsed, outbox_count)
     finally:
         _IS_ONLINE_RUNNING = False
@@ -744,7 +745,7 @@ async def _check_profile_and_notify(bot: Bot) -> None:
         logger.warning("Overlap protection: _check_profile_and_notify is already running.")
         return
     _IS_PROFILE_RUNNING = True
-    t0 = time.time()
+    t0 = time_mod.time()
     
     try:
         pairs = await db.get_all_active_pairs()
@@ -913,7 +914,7 @@ async def _check_profile_and_notify(bot: Bot) -> None:
                             logger.error("Ошибка постов chat_id=%s: %s", chat_id, exc)
 
         await db.save_multiple_profile_caches(profiles_to_save)
-        elapsed = time.time() - t0
+        elapsed = time_mod.time() - t0
         logger.info("[VK Tracker] Profile check completed for %s users in %.2fs. Outbox messages: %s", len(vk_ids), elapsed, outbox_count)
     finally:
         _IS_PROFILE_RUNNING = False

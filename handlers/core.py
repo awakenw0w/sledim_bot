@@ -157,8 +157,8 @@ async def menu_help(message: Message) -> None:
     await _show_help(message)
 
 
-# Navigation Callback Router
-@router.callback_query(NavCallback.filter())
+# Navigation Callback Router - Narrowed to core targets only
+@router.callback_query(NavCallback.filter(F.target.in_({"main", "vk_menu", "tg_menu", "general_reports_hub", "notification_hub", "help"})))
 async def cb_nav(callback: CallbackQuery, callback_data: NavCallback, state: FSMContext) -> None:
     target = callback_data.target
     if target == "main":
@@ -181,7 +181,7 @@ async def cb_nav(callback: CallbackQuery, callback_data: NavCallback, state: FSM
         await _show_help(callback.message)
     # Остальные цели (vk_add, vk_list, и т.д.) будут перехвачены в своих модулях
     else:
-        # Если цель не в core, пропускаем дальше по цепочке роутеров
+        # should not happen with the narrowed filter, but for safety:
         return
 
     await callback.answer()

@@ -491,20 +491,17 @@ async def get_batch_profile_data(vk_ids: list[int]) -> dict[int, dict[str, Any]]
     # Значения - объект с полями wall, friends, followers, subscriptions
     
     script_parts = []
-    script_parts.append("var res = {};")
+    script_parts.append("var results = {};")
     
     for vid in vk_ids:
         vid_str = str(vid)
-        # Получаем стену (последние 100 постов)
-        script_parts.append(f'res["u{vid_str}_wall"] = API.wall.get({{"owner_id": {vid_str}, "count": {WALL_POST_TRACK_LIMIT}, "filter": "owner"}});')
-        # Получаем друзей
-        script_parts.append(f'res["u{vid_str}_friends"] = API.friends.get({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_FRIENDS]}, "fields": "domain"}});')
-        # Получаем подписчиков
-        script_parts.append(f'res["u{vid_str}_followers"] = API.users.getFollowers({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_FOLLOWERS]}, "fields": "domain"}});')
-        # Получаем подписки
-        script_parts.append(f'res["u{vid_str}_subscriptions"] = API.users.getSubscriptions({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_SUBSCRIPTIONS]}, "extended": 1, "fields": "domain"}});')
+        # Использование точечной нотации (results.key) более надежно в VKScript для присваивания
+        script_parts.append(f'results.u{vid_str}_wall = API.wall.get({{"owner_id": {vid_str}, "count": {WALL_POST_TRACK_LIMIT}, "filter": "owner"}});')
+        script_parts.append(f'results.u{vid_str}_friends = API.friends.get({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_FRIENDS]}, "fields": "domain"}});')
+        script_parts.append(f'results.u{vid_str}_followers = API.users.getFollowers({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_FOLLOWERS]}, "fields": "domain"}});')
+        script_parts.append(f'results.u{vid_str}_subscriptions = API.users.getSubscriptions({{"user_id": {vid_str}, "count": {RELATION_LIST_BATCH_SIZES[RELATION_LIST_SUBSCRIPTIONS]}, "extended": 1, "fields": "domain"}});')
 
-    script_parts.append("return res;")
+    script_parts.append("return results;")
     code = "\n".join(script_parts)
     
     raw_response = await execute(code)
@@ -597,6 +594,7 @@ async def _get_paginated_relation_snapshot(
         return _too_large_relation_result(list_type, total_count)
 
     collected_items: list[dict[str, Any]] = []
+    unique_items: dict[int, dict[str, Any]] = {}
     offset = 0
 
     while True:
@@ -625,6 +623,11 @@ async def _get_paginated_relation_snapshot(
                  return processed
         
         normalized_batch = processed.get("items") or []
+        for item in normalized_batch:
+            uid = item.get("entity_id") or item.get("id")
+            if uid:
+                unique_items[uid] = item
+        
         collected_items.extend(normalized_batch)
         
         if total_count == 0:

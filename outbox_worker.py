@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import time
+import time as time_mod
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -39,7 +39,7 @@ async def run_outbox_worker(bot: Bot) -> None:
                 disable_preview = msg["disable_preview"]
                 attempt_count = msg["attempt_count"]
 
-                now_ts = int(time.time())
+                now_ts = int(time_mod.time())
 
                 if attempt_count >= MAX_ATTEMPTS:
                     logger.warning("Message ID %s: превышен лимит попыток (%s). Снято с очереди.", msg_id, MAX_ATTEMPTS)

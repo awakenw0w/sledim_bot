@@ -94,6 +94,18 @@ PROFILE_CHANGE_FILTERS: dict[str, dict[str, Any]] = {
 
 PROFILE_CHANGE_LABELS = {"wall_post": "Пост"}
 
+CHANGE_NOTIFICATION_LABELS = {
+    "name": "Имя и фамилия",
+    "avatar": "Аватарка",
+    "status": "Статус профиля",
+    "link": "Ссылка на профиль",
+    "privacy": "Открыт / закрыт профиль",
+    "fields": "Поля профиля",
+    "posts": "Посты",
+    "counts": "Счетчики",
+    "relations": "Друзья / подписчики / подписки",
+}
+
 TG_NOTIFICATION_TOGGLE_LABELS = {"activity": "Активность / last seen [TG]"}
 
 TG_CHANGE_NOTIFICATION_LABELS = {
