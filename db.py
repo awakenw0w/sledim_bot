@@ -5,10 +5,29 @@
 """
 
 import json
+import logging
+from contextlib import asynccontextmanager
 
 import aiosqlite
 
 from config import DB_PATH
+
+logger = logging.getLogger(__name__)
+
+_db_conn: aiosqlite.Connection | None = None
+
+@asynccontextmanager
+async def get_db_connection():
+    if _db_conn is None:
+        raise RuntimeError("Database connection is not initialized. Call init_db() first.")
+    yield _db_conn
+
+async def close_db() -> None:
+    global _db_conn
+    if _db_conn is not None:
+        await _db_conn.close()
+        _db_conn = None
+        logger.info("Database connection closed.")
 
 DEFAULT_NOTIFICATION_MODE = "all"
 VALID_NOTIFICATION_MODES = {"online", "offline", "all", "off"}
@@ -73,284 +92,312 @@ async def _ensure_column(db: aiosqlite.Connection, table_name: str, column_name:
 
 
 async def init_db() -> None:
-    """Создаёт таблицы в БД и аккуратно добавляет новые поля при обновлении."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tracked_users (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id     INTEGER NOT NULL,
-                vk_id       INTEGER NOT NULL,
-                is_active   INTEGER NOT NULL DEFAULT 1,
-                added_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(chat_id, vk_id)
-            )
-        """)
+    """Создаёт таблицы в БД, инициализирует подключение и выполняет миграции."""
+    global _db_conn
+    if _db_conn is None:
+        _db_conn = await aiosqlite.connect(DB_PATH)
+        await _db_conn.execute("PRAGMA journal_mode=WAL;")
+        await _db_conn.execute("PRAGMA synchronous=NORMAL;")
+        await _db_conn.execute("PRAGMA foreign_keys=ON;")
+        logger.info("Database connection initialized with WAL and foreign_keys pragmas.")
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS chat_settings (
-                chat_id                    INTEGER PRIMARY KEY,
-                notification_mode          TEXT NOT NULL DEFAULT 'all',
-                tg_notification_mode       TEXT NOT NULL DEFAULT 'all',
-                tg_notify_activity         INTEGER NOT NULL DEFAULT 1,
-                tg_notify_first_name_changes INTEGER NOT NULL DEFAULT 1,
-                tg_notify_last_name_changes  INTEGER NOT NULL DEFAULT 1,
-                tg_notify_username_changes   INTEGER NOT NULL DEFAULT 1,
-                tg_notify_avatar_changes     INTEGER NOT NULL DEFAULT 1,
-                tg_notify_gifts_changes      INTEGER NOT NULL DEFAULT 1,
-                tg_notify_bio_changes        INTEGER NOT NULL DEFAULT 1,
-                notify_name_changes        INTEGER NOT NULL DEFAULT 1,
-                notify_avatar_changes      INTEGER NOT NULL DEFAULT 1,
-                notify_status_changes      INTEGER NOT NULL DEFAULT 1,
-                notify_link_changes        INTEGER NOT NULL DEFAULT 1,
-                notify_privacy_changes     INTEGER NOT NULL DEFAULT 1,
-                notify_fields_changes      INTEGER NOT NULL DEFAULT 1,
-                notify_posts_changes       INTEGER NOT NULL DEFAULT 1,
-                notify_counts_changes      INTEGER NOT NULL DEFAULT 1,
-                notify_relations_changes   INTEGER NOT NULL DEFAULT 1,
-                created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at                 TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+    async with get_db_connection() as db:
+        async with db.execute("PRAGMA user_version") as cursor:
+            row = await cursor.fetchone()
+            current_version = row[0] if row else 0
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS last_status (
-                vk_id               INTEGER PRIMARY KEY,
-                online              INTEGER,
-                last_seen           INTEGER,
-                first_name          TEXT,
-                last_name           TEXT,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+        # Версия 0 -> 1: Начальная схема
+        if current_version < 1:
+            logger.info("Running migration to schema version 1...")
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tracked_users (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id     INTEGER NOT NULL,
+                    vk_id       INTEGER NOT NULL,
+                    is_active   INTEGER NOT NULL DEFAULT 1,
+                    added_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(chat_id, vk_id)
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS online_sessions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id     INTEGER NOT NULL,
-                vk_id       INTEGER NOT NULL,
-                started_at  INTEGER NOT NULL,
-                ended_at    INTEGER,
-                created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS chat_settings (
+                    chat_id                    INTEGER PRIMARY KEY,
+                    notification_mode          TEXT NOT NULL DEFAULT 'all',
+                    tg_notification_mode       TEXT NOT NULL DEFAULT 'all',
+                    tg_notify_activity         INTEGER NOT NULL DEFAULT 1,
+                    tg_notify_first_name_changes INTEGER NOT NULL DEFAULT 1,
+                    tg_notify_last_name_changes  INTEGER NOT NULL DEFAULT 1,
+                    tg_notify_username_changes   INTEGER NOT NULL DEFAULT 1,
+                    tg_notify_avatar_changes     INTEGER NOT NULL DEFAULT 1,
+                    tg_notify_gifts_changes      INTEGER NOT NULL DEFAULT 1,
+                    tg_notify_bio_changes        INTEGER NOT NULL DEFAULT 1,
+                    notify_name_changes        INTEGER NOT NULL DEFAULT 1,
+                    notify_avatar_changes      INTEGER NOT NULL DEFAULT 1,
+                    notify_status_changes      INTEGER NOT NULL DEFAULT 1,
+                    notify_link_changes        INTEGER NOT NULL DEFAULT 1,
+                    notify_privacy_changes     INTEGER NOT NULL DEFAULT 1,
+                    notify_fields_changes      INTEGER NOT NULL DEFAULT 1,
+                    notify_posts_changes       INTEGER NOT NULL DEFAULT 1,
+                    notify_counts_changes      INTEGER NOT NULL DEFAULT 1,
+                    notify_relations_changes   INTEGER NOT NULL DEFAULT 1,
+                    created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at                 TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS profile_cache (
-                vk_id               INTEGER PRIMARY KEY,
-                first_name          TEXT,
-                last_name           TEXT,
-                profile_status_text TEXT,
-                avatar_url          TEXT,
-                avatar_photo_id     TEXT,
-                domain              TEXT,
-                is_closed           TEXT,
-                friends_count       INTEGER,
-                followers_count     INTEGER,
-                subscriptions_count INTEGER,
-                city                TEXT,
-                country             TEXT,
-                about               TEXT,
-                bdate               TEXT,
-                relation            TEXT,
-                site                TEXT,
-                interests           TEXT,
-                books               TEXT,
-                movies              TEXT,
-                activities          TEXT,
-                games               TEXT,
-                quotes              TEXT,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS last_status (
+                    vk_id               INTEGER PRIMARY KEY,
+                    online              INTEGER,
+                    last_seen           INTEGER,
+                    first_name          TEXT,
+                    last_name           TEXT,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS profile_change_history (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                vk_id           INTEGER NOT NULL,
-                field_name      TEXT NOT NULL,
-                old_value       TEXT,
-                new_value       TEXT,
-                changed_at      INTEGER NOT NULL,
-                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS online_sessions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id     INTEGER NOT NULL,
+                    vk_id       INTEGER NOT NULL,
+                    started_at  INTEGER NOT NULL,
+                    ended_at    INTEGER,
+                    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS profile_list_meta (
-                vk_id               INTEGER NOT NULL,
-                list_type           TEXT NOT NULL,
-                total_count         INTEGER,
-                is_complete         INTEGER NOT NULL DEFAULT 0,
-                last_reason         TEXT,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (vk_id, list_type)
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS profile_cache (
+                    vk_id               INTEGER PRIMARY KEY,
+                    first_name          TEXT,
+                    last_name           TEXT,
+                    profile_status_text TEXT,
+                    avatar_url          TEXT,
+                    avatar_photo_id     TEXT,
+                    domain              TEXT,
+                    is_closed           TEXT,
+                    friends_count       INTEGER,
+                    followers_count     INTEGER,
+                    subscriptions_count INTEGER,
+                    city                TEXT,
+                    country             TEXT,
+                    about               TEXT,
+                    bdate               TEXT,
+                    relation            TEXT,
+                    site                TEXT,
+                    interests           TEXT,
+                    books               TEXT,
+                    movies              TEXT,
+                    activities          TEXT,
+                    games               TEXT,
+                    quotes              TEXT,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS profile_list_items (
-                vk_id               INTEGER NOT NULL,
-                list_type           TEXT NOT NULL,
-                entity_type         TEXT NOT NULL,
-                entity_id           INTEGER NOT NULL,
-                screen_name         TEXT,
-                first_name          TEXT,
-                last_name           TEXT,
-                title               TEXT,
-                profile_link        TEXT,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (vk_id, list_type, entity_type, entity_id)
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS profile_change_history (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    vk_id           INTEGER NOT NULL,
+                    field_name      TEXT NOT NULL,
+                    old_value       TEXT,
+                    new_value       TEXT,
+                    changed_at      INTEGER NOT NULL,
+                    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS wall_post_meta (
-                vk_id               INTEGER PRIMARY KEY,
-                total_count         INTEGER,
-                is_available        INTEGER NOT NULL DEFAULT 0,
-                last_reason         TEXT,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS profile_list_meta (
+                    vk_id               INTEGER NOT NULL,
+                    list_type           TEXT NOT NULL,
+                    total_count         INTEGER,
+                    is_complete         INTEGER NOT NULL DEFAULT 0,
+                    last_reason         TEXT,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (vk_id, list_type)
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS wall_post_items (
-                vk_id               INTEGER NOT NULL,
-                post_id             INTEGER NOT NULL,
-                owner_id            INTEGER NOT NULL,
-                created_at          INTEGER,
-                text                TEXT,
-                post_link           TEXT,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (vk_id, post_id)
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS profile_list_items (
+                    vk_id               INTEGER NOT NULL,
+                    list_type           TEXT NOT NULL,
+                    entity_type         TEXT NOT NULL,
+                    entity_id           INTEGER NOT NULL,
+                    screen_name         TEXT,
+                    first_name          TEXT,
+                    last_name           TEXT,
+                    title               TEXT,
+                    profile_link        TEXT,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (vk_id, list_type, entity_type, entity_id)
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tg_tracked_users (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id             INTEGER NOT NULL,
-                telegram_user_id    INTEGER NOT NULL,
-                username            TEXT,
-                first_name          TEXT,
-                last_name           TEXT,
-                source_value        TEXT,
-                is_active           INTEGER NOT NULL DEFAULT 1,
-                added_at            TEXT    NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(chat_id, telegram_user_id)
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS wall_post_meta (
+                    vk_id               INTEGER PRIMARY KEY,
+                    total_count         INTEGER,
+                    is_available        INTEGER NOT NULL DEFAULT 0,
+                    last_reason         TEXT,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tg_last_status (
-                telegram_user_id    INTEGER PRIMARY KEY,
-                status_text         TEXT,
-                last_seen_at        INTEGER,
-                is_online           INTEGER,
-                status_kind         TEXT,
-                activity_at         INTEGER,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS wall_post_items (
+                    vk_id               INTEGER NOT NULL,
+                    post_id             INTEGER NOT NULL,
+                    owner_id            INTEGER NOT NULL,
+                    created_at          INTEGER,
+                    text                TEXT,
+                    post_link           TEXT,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (vk_id, post_id)
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tg_online_sessions (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id             INTEGER NOT NULL,
-                telegram_user_id    INTEGER NOT NULL,
-                started_at          INTEGER NOT NULL,
-                ended_at            INTEGER,
-                created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tg_tracked_users (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id             INTEGER NOT NULL,
+                    telegram_user_id    INTEGER NOT NULL,
+                    username            TEXT,
+                    first_name          TEXT,
+                    last_name           TEXT,
+                    source_value        TEXT,
+                    is_active           INTEGER NOT NULL DEFAULT 1,
+                    added_at            TEXT    NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(chat_id, telegram_user_id)
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tg_known_users (
-                telegram_user_id    INTEGER PRIMARY KEY,
-                username            TEXT,
-                first_name          TEXT,
-                last_name           TEXT,
-                access_hash         INTEGER,
-                profile_link        TEXT,
-                avatar_photo_id     TEXT,
-                avatar_dc_id        INTEGER,
-                avatar_has_video    INTEGER NOT NULL DEFAULT 0,
-                gifts_count         INTEGER,
-                gifts_supported     INTEGER,
-                bio                 TEXT,
-                is_bot              INTEGER NOT NULL DEFAULT 0,
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tg_last_status (
+                    telegram_user_id    INTEGER PRIMARY KEY,
+                    status_text         TEXT,
+                    last_seen_at        INTEGER,
+                    is_online           INTEGER,
+                    status_kind         TEXT,
+                    activity_at         INTEGER,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tg_profile_change_history (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_user_id    INTEGER NOT NULL,
-                change_type         TEXT NOT NULL,
-                old_value           TEXT,
-                new_value           TEXT,
-                metadata_json       TEXT,
-                changed_at          INTEGER NOT NULL,
-                created_at          TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tg_online_sessions (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id             INTEGER NOT NULL,
+                    telegram_user_id    INTEGER NOT NULL,
+                    started_at          INTEGER NOT NULL,
+                    ended_at            INTEGER,
+                    created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
 
-        await _ensure_column(db, "chat_settings", "notification_mode", "TEXT NOT NULL DEFAULT 'all'")
-        await _ensure_column(db, "chat_settings", "tg_notification_mode", "TEXT NOT NULL DEFAULT 'all'")
-        await _ensure_column(db, "chat_settings", "tg_notify_activity", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "tg_notify_first_name_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "tg_notify_last_name_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "tg_notify_username_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "tg_notify_avatar_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "tg_notify_gifts_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "tg_notify_bio_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_name_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_avatar_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_status_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_link_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_privacy_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_fields_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_posts_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_counts_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "notify_relations_changes", "INTEGER NOT NULL DEFAULT 1")
-        await _ensure_column(db, "chat_settings", "created_at", "TEXT NOT NULL DEFAULT (datetime('now'))")
-        await _ensure_column(db, "chat_settings", "updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))")
-        await _ensure_column(db, "profile_cache", "first_name", "TEXT")
-        await _ensure_column(db, "profile_cache", "last_name", "TEXT")
-        await _ensure_column(db, "profile_cache", "profile_status_text", "TEXT")
-        await _ensure_column(db, "profile_cache", "avatar_url", "TEXT")
-        await _ensure_column(db, "profile_cache", "avatar_photo_id", "TEXT")
-        await _ensure_column(db, "profile_cache", "domain", "TEXT")
-        await _ensure_column(db, "profile_cache", "is_closed", "TEXT")
-        await _ensure_column(db, "profile_cache", "friends_count", "INTEGER")
-        await _ensure_column(db, "profile_cache", "followers_count", "INTEGER")
-        await _ensure_column(db, "profile_cache", "subscriptions_count", "INTEGER")
-        await _ensure_column(db, "profile_cache", "city", "TEXT")
-        await _ensure_column(db, "profile_cache", "country", "TEXT")
-        await _ensure_column(db, "profile_cache", "about", "TEXT")
-        await _ensure_column(db, "profile_cache", "bdate", "TEXT")
-        await _ensure_column(db, "profile_cache", "relation", "TEXT")
-        await _ensure_column(db, "profile_cache", "site", "TEXT")
-        await _ensure_column(db, "profile_cache", "interests", "TEXT")
-        await _ensure_column(db, "profile_cache", "books", "TEXT")
-        await _ensure_column(db, "profile_cache", "movies", "TEXT")
-        await _ensure_column(db, "profile_cache", "activities", "TEXT")
-        await _ensure_column(db, "profile_cache", "games", "TEXT")
-        await _ensure_column(db, "profile_cache", "quotes", "TEXT")
-        await _ensure_column(db, "profile_cache", "updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))")
-        await _ensure_column(db, "tg_tracked_users", "source_value", "TEXT")
-        await _ensure_column(db, "tg_known_users", "access_hash", "INTEGER")
-        await _ensure_column(db, "tg_known_users", "profile_link", "TEXT")
-        await _ensure_column(db, "tg_known_users", "avatar_photo_id", "TEXT")
-        await _ensure_column(db, "tg_known_users", "avatar_dc_id", "INTEGER")
-        await _ensure_column(db, "tg_known_users", "avatar_has_video", "INTEGER NOT NULL DEFAULT 0")
-        await _ensure_column(db, "tg_known_users", "gifts_count", "INTEGER")
-        await _ensure_column(db, "tg_known_users", "gifts_supported", "INTEGER")
-        await _ensure_column(db, "tg_known_users", "bio", "TEXT")
-        await _ensure_column(db, "tg_last_status", "is_online", "INTEGER")
-        await _ensure_column(db, "tg_last_status", "status_kind", "TEXT")
-        await _ensure_column(db, "tg_last_status", "activity_at", "INTEGER")
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tg_known_users (
+                    telegram_user_id    INTEGER PRIMARY KEY,
+                    username            TEXT,
+                    first_name          TEXT,
+                    last_name           TEXT,
+                    access_hash         INTEGER,
+                    profile_link        TEXT,
+                    avatar_photo_id     TEXT,
+                    avatar_dc_id        INTEGER,
+                    avatar_has_video    INTEGER NOT NULL DEFAULT 0,
+                    gifts_count         INTEGER,
+                    gifts_supported     INTEGER,
+                    bio                 TEXT,
+                    is_bot              INTEGER NOT NULL DEFAULT 0,
+                    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tg_profile_change_history (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id    INTEGER NOT NULL,
+                    change_type         TEXT NOT NULL,
+                    old_value           TEXT,
+                    new_value           TEXT,
+                    metadata_json       TEXT,
+                    changed_at          INTEGER NOT NULL,
+                    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+
+            # Безопасное добавление колонок на случай если это была уже рабочая БД, к которой 
+            # применяют новую схему v1 (защита _ensure_column)
+            await _ensure_column(db, "chat_settings", "notification_mode", "TEXT NOT NULL DEFAULT 'all'")
+            await _ensure_column(db, "chat_settings", "tg_notification_mode", "TEXT NOT NULL DEFAULT 'all'")
+            await _ensure_column(db, "chat_settings", "tg_notify_activity", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "tg_notify_first_name_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "tg_notify_last_name_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "tg_notify_username_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "tg_notify_avatar_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "tg_notify_gifts_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "tg_notify_bio_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_name_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_avatar_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_status_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_link_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_privacy_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_fields_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_posts_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_counts_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "notify_relations_changes", "INTEGER NOT NULL DEFAULT 1")
+            await _ensure_column(db, "chat_settings", "created_at", "TEXT NOT NULL DEFAULT (datetime('now'))")
+            await _ensure_column(db, "chat_settings", "updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))")
+            await _ensure_column(db, "profile_cache", "first_name", "TEXT")
+            await _ensure_column(db, "profile_cache", "last_name", "TEXT")
+            await _ensure_column(db, "profile_cache", "profile_status_text", "TEXT")
+            await _ensure_column(db, "profile_cache", "avatar_url", "TEXT")
+            await _ensure_column(db, "profile_cache", "avatar_photo_id", "TEXT")
+            await _ensure_column(db, "profile_cache", "domain", "TEXT")
+            await _ensure_column(db, "profile_cache", "is_closed", "TEXT")
+            await _ensure_column(db, "profile_cache", "friends_count", "INTEGER")
+            await _ensure_column(db, "profile_cache", "followers_count", "INTEGER")
+            await _ensure_column(db, "profile_cache", "subscriptions_count", "INTEGER")
+            await _ensure_column(db, "profile_cache", "city", "TEXT")
+            await _ensure_column(db, "profile_cache", "country", "TEXT")
+            await _ensure_column(db, "profile_cache", "about", "TEXT")
+            await _ensure_column(db, "profile_cache", "bdate", "TEXT")
+            await _ensure_column(db, "profile_cache", "relation", "TEXT")
+            await _ensure_column(db, "profile_cache", "site", "TEXT")
+            await _ensure_column(db, "profile_cache", "interests", "TEXT")
+            await _ensure_column(db, "profile_cache", "books", "TEXT")
+            await _ensure_column(db, "profile_cache", "movies", "TEXT")
+            await _ensure_column(db, "profile_cache", "activities", "TEXT")
+            await _ensure_column(db, "profile_cache", "games", "TEXT")
+            await _ensure_column(db, "profile_cache", "quotes", "TEXT")
+            await _ensure_column(db, "profile_cache", "updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))")
+            await _ensure_column(db, "tg_tracked_users", "source_value", "TEXT")
+            await _ensure_column(db, "tg_known_users", "access_hash", "INTEGER")
+            await _ensure_column(db, "tg_known_users", "profile_link", "TEXT")
+            await _ensure_column(db, "tg_known_users", "avatar_photo_id", "TEXT")
+            await _ensure_column(db, "tg_known_users", "avatar_dc_id", "INTEGER")
+            await _ensure_column(db, "tg_known_users", "avatar_has_video", "INTEGER NOT NULL DEFAULT 0")
+            await _ensure_column(db, "tg_known_users", "gifts_count", "INTEGER")
+            await _ensure_column(db, "tg_known_users", "gifts_supported", "INTEGER")
+            await _ensure_column(db, "tg_known_users", "bio", "TEXT")
+            await _ensure_column(db, "tg_last_status", "is_online", "INTEGER")
+            await _ensure_column(db, "tg_last_status", "status_kind", "TEXT")
+            await _ensure_column(db, "tg_last_status", "activity_at", "INTEGER")
+
+            await db.execute("PRAGMA user_version = 1")
+        
+        # Индексы (идемпотентные)
+        logger.info("Verifying database indices...")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_online_sessions_chat_vk ON online_sessions(chat_id, vk_id, started_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tg_online_sessions_chat_tg ON tg_online_sessions(chat_id, telegram_user_id, started_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_profile_history_vk_field ON profile_change_history(vk_id, field_name)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tg_profile_history_tg_type ON tg_profile_change_history(telegram_user_id, change_type)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tracked_users_active ON tracked_users(chat_id, is_active)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tg_tracked_users_active ON tg_tracked_users(chat_id, is_active)")
 
         await db.commit()
 
@@ -368,7 +415,7 @@ async def add_tracked_user(chat_id: int, vk_id: int) -> bool:
     Добавляет VK пользователя в список отслеживаемых для данного chat_id.
     Возвращает True, если добавлен впервые или был реактивирован.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
 
         async with db.execute(
@@ -410,7 +457,7 @@ async def add_tg_tracked_user(
     normalized_last_name = (last_name or "").strip() or None
     normalized_source_value = (source_value or "").strip() or None
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
 
         async with db.execute(
@@ -480,7 +527,7 @@ async def sync_tg_tracked_user_profile(
     normalized_first_name = (first_name or "").strip() or None
     normalized_last_name = (last_name or "").strip() or None
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """
             UPDATE tg_tracked_users
@@ -522,7 +569,7 @@ async def upsert_tg_known_user(
     normalized_profile_link = (profile_link or "").strip() or None
     normalized_avatar_photo_id = (avatar_photo_id or "").strip() or None
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """
             INSERT INTO tg_known_users (
@@ -581,7 +628,7 @@ async def get_tg_known_user_by_username(username: str) -> dict | None:
     if not normalized_username:
         return None
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             """
             SELECT
@@ -630,7 +677,7 @@ async def get_tg_known_user_by_username(username: str) -> dict | None:
 
 async def get_tg_known_user_by_id(telegram_user_id: int) -> dict | None:
     """Возвращает известного Telegram-пользователя по id, если бот уже видел его раньше."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             """
             SELECT
@@ -679,7 +726,7 @@ async def get_tg_known_user_by_id(telegram_user_id: int) -> dict | None:
 
 async def remove_tracked_user(chat_id: int, vk_id: int) -> bool:
     """Удаляет VK пользователя из списка отслеживаемых для данного chat_id."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute(
             "DELETE FROM tracked_users WHERE chat_id = ? AND vk_id = ?",
             (chat_id, vk_id)
@@ -690,7 +737,7 @@ async def remove_tracked_user(chat_id: int, vk_id: int) -> bool:
 
 async def remove_tg_tracked_user(chat_id: int, telegram_user_id: int) -> bool:
     """Удаляет Telegram-пользователя из списка отслеживаемых для данного чата."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute(
             "DELETE FROM tg_tracked_users WHERE chat_id = ? AND telegram_user_id = ?",
             (chat_id, telegram_user_id),
@@ -701,7 +748,7 @@ async def remove_tg_tracked_user(chat_id: int, telegram_user_id: int) -> bool:
 
 async def get_tracked_users(chat_id: int) -> list[int]:
     """Возвращает список активно отслеживаемых VK ID для данного chat_id."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             "SELECT vk_id FROM tracked_users WHERE chat_id = ? AND is_active = 1 ORDER BY vk_id",
             (chat_id,)
@@ -713,7 +760,7 @@ async def get_tracked_users(chat_id: int) -> list[int]:
 
 async def get_tg_tracked_users(chat_id: int) -> list[int]:
     """Возвращает список активно отслеживаемых Telegram user id для данного chat_id."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             """
             SELECT telegram_user_id
@@ -730,7 +777,7 @@ async def get_tg_tracked_users(chat_id: int) -> list[int]:
 
 async def get_all_active_pairs() -> list[tuple[int, int]]:
     """Возвращает все активные пары (chat_id, vk_id)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             "SELECT chat_id, vk_id FROM tracked_users WHERE is_active = 1"
         ) as cursor:
@@ -741,7 +788,7 @@ async def get_all_active_pairs() -> list[tuple[int, int]]:
 
 async def get_all_active_tg_pairs() -> list[tuple[int, int]]:
     """Возвращает все активные пары (chat_id, telegram_user_id)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             "SELECT chat_id, telegram_user_id FROM tg_tracked_users WHERE is_active = 1"
         ) as cursor:
@@ -752,7 +799,7 @@ async def get_all_active_tg_pairs() -> list[tuple[int, int]]:
 
 async def get_all_user_rows(chat_id: int) -> list[tuple]:
     """Возвращает все записи tracked_users для chat_id, включая неактивные."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             "SELECT id, chat_id, vk_id, is_active, added_at FROM tracked_users WHERE chat_id = ?",
             (chat_id,)
@@ -764,7 +811,7 @@ async def get_all_user_rows(chat_id: int) -> list[tuple]:
 
 async def get_tracked_user_detail(chat_id: int, vk_id: int) -> dict | None:
     """Возвращает данные по одному отслеживаемому пользователю в конкретном чате."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT
                 t.id,
@@ -889,7 +936,7 @@ async def get_tracked_users_details(chat_id: int, active_only: bool = True) -> l
             t.vk_id
     """
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
@@ -931,7 +978,7 @@ async def get_tracked_users_details(chat_id: int, active_only: bool = True) -> l
 
 async def get_tg_tracked_user_detail(chat_id: int, telegram_user_id: int) -> dict | None:
     """Возвращает данные по одному отслеживаемому Telegram-пользователю в конкретном чате."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             """
             SELECT
@@ -1042,7 +1089,7 @@ async def get_tg_tracked_users_details(chat_id: int, active_only: bool = True) -
             t.telegram_user_id
     """
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
@@ -1078,7 +1125,7 @@ async def get_tg_tracked_users_details(chat_id: int, active_only: bool = True) -
 
 async def set_tracking_active(chat_id: int, is_active: bool) -> None:
     """Включает или выключает отслеживание для всех VK ID данного chat_id."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             "UPDATE tracked_users SET is_active = ? WHERE chat_id = ?",
             (1 if is_active else 0, chat_id)
@@ -1088,7 +1135,7 @@ async def set_tracking_active(chat_id: int, is_active: bool) -> None:
 
 async def is_tracking_active(chat_id: int) -> bool:
     """Проверяет, есть ли у chat_id хотя бы один активный трекинг."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             "SELECT COUNT(*) FROM tracked_users WHERE chat_id = ? AND is_active = 1",
             (chat_id,)
@@ -1100,7 +1147,7 @@ async def is_tracking_active(chat_id: int) -> bool:
 
 async def get_tg_last_status(telegram_user_id: int) -> dict | None:
     """Возвращает последний сохраненный статус Telegram-пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             """
             SELECT status_text, last_seen_at, is_online, status_kind, activity_at, updated_at
@@ -1139,7 +1186,7 @@ async def save_tg_last_status(
     normalized_kind = (status_kind or "").strip() or None
     normalized_is_online = None if is_online is None else (1 if is_online else 0)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """
             INSERT INTO tg_last_status (
@@ -1174,7 +1221,7 @@ async def save_tg_last_status(
 
 async def get_notification_mode(chat_id: int) -> str:
     """Возвращает режим уведомлений для чата."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         async with db.execute(
             "SELECT notification_mode FROM chat_settings WHERE chat_id = ?",
@@ -1194,7 +1241,7 @@ async def set_notification_mode(chat_id: int, mode: str) -> str:
     if normalized_mode not in VALID_NOTIFICATION_MODES:
         raise ValueError(f"Unsupported notification mode: {mode}")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         await db.execute("""
             UPDATE chat_settings
@@ -1208,7 +1255,7 @@ async def set_notification_mode(chat_id: int, mode: str) -> str:
 
 async def get_tg_notification_mode(chat_id: int) -> str:
     """Возвращает режим TG-уведомлений для чата."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         async with db.execute(
             "SELECT tg_notification_mode FROM chat_settings WHERE chat_id = ?",
@@ -1228,7 +1275,7 @@ async def set_tg_notification_mode(chat_id: int, mode: str) -> str:
     if normalized_mode not in VALID_TG_NOTIFICATION_MODES:
         raise ValueError(f"Unsupported TG notification mode: {mode}")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         await db.execute(
             """
@@ -1245,7 +1292,7 @@ async def set_tg_notification_mode(chat_id: int, mode: str) -> str:
 
 async def get_tg_activity_notification_enabled(chat_id: int) -> bool:
     """Возвращает, включены ли уведомления об activity / last seen для TG."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         async with db.execute(
             "SELECT tg_notify_activity FROM chat_settings WHERE chat_id = ?",
@@ -1261,7 +1308,7 @@ async def get_tg_activity_notification_enabled(chat_id: int) -> bool:
 
 async def set_tg_activity_notification_enabled(chat_id: int, enabled: bool) -> bool:
     """Включает или отключает TG-уведомления об activity / last seen."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         await db.execute(
             """
@@ -1288,7 +1335,7 @@ async def get_tg_change_notification_settings(chat_id: int) -> dict[str, bool]:
     """Возвращает настройки TG-уведомлений по изменениям профиля."""
     select_columns = ", ".join(TG_CHANGE_NOTIFICATION_COLUMNS.values())
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         async with db.execute(
             f"SELECT {select_columns} FROM chat_settings WHERE chat_id = ?",
@@ -1313,7 +1360,7 @@ async def set_tg_change_notification_enabled(chat_id: int, key: str, enabled: bo
         raise ValueError(f"Unsupported TG change notification key: {key}")
 
     column_name = TG_CHANGE_NOTIFICATION_COLUMNS[normalized_key]
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         await db.execute(
             f"""
@@ -1344,7 +1391,7 @@ async def get_change_notification_settings(chat_id: int) -> dict[str, bool]:
     """Возвращает настройки уведомлений по не-онлайн изменениям профиля."""
     select_columns = ", ".join(CHANGE_NOTIFICATION_COLUMNS.values())
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         async with db.execute(
             f"SELECT {select_columns} FROM chat_settings WHERE chat_id = ?",
@@ -1369,7 +1416,7 @@ async def set_change_notification_enabled(chat_id: int, key: str, enabled: bool)
         raise ValueError(f"Unsupported change notification key: {key}")
 
     column_name = CHANGE_NOTIFICATION_COLUMNS[normalized_key]
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await _ensure_chat_settings_row(db, chat_id)
         await db.execute(
             f"""
@@ -1398,7 +1445,7 @@ async def toggle_change_notification(chat_id: int, key: str) -> bool:
 
 async def get_last_status(vk_id: int) -> dict | None:
     """Возвращает последний известный статус VK пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT online, last_seen, first_name, last_name
             FROM last_status
@@ -1425,7 +1472,7 @@ async def save_last_status(
     last_name: str,
 ) -> None:
     """Сохраняет или обновляет последний статус VK пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute("""
             INSERT INTO last_status (vk_id, online, last_seen, first_name, last_name, updated_at)
             VALUES (?, ?, ?, ?, ?, datetime('now'))
@@ -1441,7 +1488,7 @@ async def save_last_status(
 
 async def get_profile_cache(vk_id: int) -> dict | None:
     """Возвращает последний сохранённый снимок профиля VK пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(f"""
             SELECT vk_id, {", ".join(PROFILE_CACHE_FIELDS)}, updated_at
             FROM profile_cache
@@ -1481,7 +1528,7 @@ async def save_profile_cache(vk_id: int, profile_data: dict) -> None:
     placeholders = ", ".join("?" for _ in values)
     update_clause = ", ".join(f"{field_name} = excluded.{field_name}" for field_name in PROFILE_CACHE_FIELDS)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(f"""
             INSERT INTO profile_cache (vk_id, {", ".join(PROFILE_CACHE_FIELDS)}, updated_at)
             VALUES ({placeholders}, datetime('now'))
@@ -1493,32 +1540,36 @@ async def save_profile_cache(vk_id: int, profile_data: dict) -> None:
 
 
 async def add_profile_changes(vk_id: int, changes: list[dict], changed_at: int) -> None:
-    """Пишет изменения профиля в историю."""
+    """Пишет изменения профиля в историю (с дедупликацией)."""
     if not changes:
         return
 
-    rows = [
-        (
-            vk_id,
-            str(change["field_name"]),
-            change.get("old_value"),
-            change.get("new_value"),
-            changed_at,
-        )
-        for change in changes
-    ]
+    async with get_db_connection() as db:
+        for change in changes:
+            field_name = str(change["field_name"])
+            new_value = change.get("new_value")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.executemany("""
-            INSERT INTO profile_change_history (vk_id, field_name, old_value, new_value, changed_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, rows)
+            async with db.execute("""
+                SELECT new_value FROM profile_change_history
+                WHERE vk_id = ? AND field_name = ?
+                ORDER BY changed_at DESC LIMIT 1
+            """, (vk_id, field_name)) as cursor:
+                row = await cursor.fetchone()
+
+            if row and row[0] == new_value:
+                continue
+
+            await db.execute("""
+                INSERT INTO profile_change_history (vk_id, field_name, old_value, new_value, changed_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (vk_id, field_name, change.get("old_value"), new_value, changed_at))
+
         await db.commit()
 
 
 async def get_recent_profile_changes(chat_id: int, limit: int = 30) -> list[dict]:
     """Возвращает последние изменения профилей пользователей, отслеживаемых в чате."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT
                 h.id,
@@ -1600,7 +1651,7 @@ async def get_profile_changes_for_report(
     query += " ORDER BY h.changed_at DESC, h.id DESC LIMIT ?"
     params.append(limit)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
@@ -1622,7 +1673,7 @@ async def get_profile_changes_for_report(
 
 async def get_profile_list_meta(vk_id: int, list_type: str) -> dict | None:
     """Возвращает метаданные сохранённого снимка списка друзей/подписчиков/подписок."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT vk_id, list_type, total_count, is_complete, last_reason, updated_at
             FROM profile_list_meta
@@ -1646,7 +1697,7 @@ async def get_profile_list_meta(vk_id: int, list_type: str) -> dict | None:
 
 async def get_profile_list_items(vk_id: int, list_type: str) -> list[dict]:
     """Возвращает последний полный снимок элементов списка."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT entity_type, entity_id, screen_name, first_name, last_name, title, profile_link
             FROM profile_list_items
@@ -1684,7 +1735,7 @@ async def save_profile_list_snapshot(
     Если is_complete=False, элементы не трогаются: это позволяет честно отмечать,
     что точное сравнение сейчас невозможно, не притворяясь, будто список известен.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute("""
             INSERT INTO profile_list_meta (vk_id, list_type, total_count, is_complete, last_reason, updated_at)
             VALUES (?, ?, ?, ?, ?, datetime('now'))
@@ -1735,7 +1786,7 @@ async def save_profile_list_snapshot(
 
 async def get_wall_post_meta(vk_id: int) -> dict | None:
     """Возвращает метаданные последнего сохранённого снимка стены пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT vk_id, total_count, is_available, last_reason, updated_at
             FROM wall_post_meta
@@ -1758,7 +1809,7 @@ async def get_wall_post_meta(vk_id: int) -> dict | None:
 
 async def get_wall_post_items(vk_id: int) -> list[dict]:
     """Возвращает последний сохранённый список постов со стены пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT post_id, owner_id, created_at, text, post_link
             FROM wall_post_items
@@ -1792,7 +1843,7 @@ async def save_wall_post_snapshot(
     Если стена доступна, список постов заменяется целиком. Если недоступна, старые посты не трогаются,
     чтобы не выдавать отсутствие доступа за удаление записей.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute("""
             INSERT INTO wall_post_meta (vk_id, total_count, is_available, last_reason, updated_at)
             VALUES (?, ?, ?, ?, datetime('now'))
@@ -1837,7 +1888,7 @@ async def save_wall_post_snapshot(
 
 async def get_last_tg_profile_change(telegram_user_id: int, change_type: str) -> dict | None:
     """Возвращает самую последнюю запись об изменении конкретного типа для TG-пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT old_value, new_value, changed_at
             FROM tg_profile_change_history
@@ -1858,39 +1909,34 @@ async def get_last_tg_profile_change(telegram_user_id: int, change_type: str) ->
 
 
 async def add_tg_profile_changes(telegram_user_id: int, changes: list[dict], changed_at: int) -> None:
-    """Пишет изменения TG-профиля в историю."""
+    """Пишет изменения TG-профиля в историю (с дедупликацией)."""
     if not changes:
         return
 
-    rows = []
-    for change in changes:
-        metadata = change.get("metadata")
-        rows.append(
-            (
-                telegram_user_id,
-                str(change["change_type"]),
-                change.get("old_value"),
-                change.get("new_value"),
-                json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
-                changed_at,
-            )
-        )
+    async with get_db_connection() as db:
+        for change in changes:
+            change_type = str(change["change_type"])
+            new_value = change.get("new_value")
+            metadata = change.get("metadata")
+            metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.executemany(
-            """
-            INSERT INTO tg_profile_change_history (
-                telegram_user_id,
-                change_type,
-                old_value,
-                new_value,
-                metadata_json,
-                changed_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
+            async with db.execute("""
+                SELECT new_value FROM tg_profile_change_history
+                WHERE telegram_user_id = ? AND change_type = ?
+                ORDER BY changed_at DESC LIMIT 1
+            """, (telegram_user_id, change_type)) as cursor:
+                row = await cursor.fetchone()
+
+            if row and row[0] == new_value:
+                continue
+
+            await db.execute("""
+                INSERT INTO tg_profile_change_history (
+                    telegram_user_id, change_type, old_value, new_value, metadata_json, changed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (telegram_user_id, change_type, change.get("old_value"), new_value, metadata_json, changed_at))
+
         await db.commit()
 
 
@@ -1932,7 +1978,7 @@ async def get_tg_profile_changes_for_report(
     query += " ORDER BY h.changed_at DESC, h.id DESC LIMIT ?"
     params.append(limit)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
@@ -1961,7 +2007,7 @@ async def get_tg_profile_changes_for_report(
 
 async def get_tg_open_session(chat_id: int, telegram_user_id: int) -> dict | None:
     """Возвращает текущую незакрытую TG онлайн-сессию пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             """
             SELECT id, started_at
@@ -1985,7 +2031,7 @@ async def get_tg_open_session(chat_id: int, telegram_user_id: int) -> dict | Non
 
 async def start_tg_online_session(chat_id: int, telegram_user_id: int, started_at: int) -> int:
     """Создает новую TG онлайн-сессию и возвращает ее ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute(
             """
             INSERT INTO tg_online_sessions (chat_id, telegram_user_id, started_at, ended_at)
@@ -1998,19 +2044,13 @@ async def start_tg_online_session(chat_id: int, telegram_user_id: int, started_a
 
 
 async def end_tg_online_session(chat_id: int, telegram_user_id: int, ended_at: int) -> bool:
-    """Закрывает последнюю незакрытую TG онлайн-сессию пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    """Закрывает все незакрытые TG онлайн-сессии пользователя атомарно."""
+    async with get_db_connection() as db:
         cursor = await db.execute(
             """
             UPDATE tg_online_sessions
             SET ended_at = ?
-            WHERE id = (
-                SELECT id
-                FROM tg_online_sessions
-                WHERE chat_id = ? AND telegram_user_id = ? AND ended_at IS NULL
-                ORDER BY started_at DESC
-                LIMIT 1
-            )
+            WHERE chat_id = ? AND telegram_user_id = ? AND ended_at IS NULL
             """,
             (ended_at, chat_id, telegram_user_id),
         )
@@ -2019,27 +2059,31 @@ async def end_tg_online_session(chat_id: int, telegram_user_id: int, ended_at: i
 
 
 async def ensure_tg_open_session(chat_id: int, telegram_user_id: int, started_at: int) -> bool:
-    """Гарантирует, что у пользователя есть открытая TG онлайн-сессия."""
-    existing = await get_tg_open_session(chat_id, telegram_user_id)
-    if existing is not None:
-        return False
-
-    await start_tg_online_session(chat_id, telegram_user_id, started_at)
-    return True
+    """Гарантирует, что у пользователя есть открытая TG онлайн-сессия атомарно."""
+    async with get_db_connection() as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO tg_online_sessions (chat_id, telegram_user_id, started_at, ended_at)
+            SELECT ?, ?, ?, NULL
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tg_online_sessions
+                WHERE chat_id = ? AND telegram_user_id = ? AND ended_at IS NULL
+            )
+            """,
+            (chat_id, telegram_user_id, started_at, chat_id, telegram_user_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def close_tg_open_session_if_exists(chat_id: int, telegram_user_id: int, ended_at: int) -> bool:
-    """Закрывает TG онлайн-сессию, если она существует."""
-    existing = await get_tg_open_session(chat_id, telegram_user_id)
-    if existing is None:
-        return False
-
+    """Закрывает TG онлайн-сессию, если она существует (атомарно)."""
     return await end_tg_online_session(chat_id, telegram_user_id, ended_at)
 
 
 async def get_tg_online_sessions(chat_id: int, telegram_user_id: int, limit: int = 10) -> list[dict]:
     """Возвращает последние TG онлайн-сессии пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(
             """
             SELECT id, started_at, ended_at
@@ -2081,7 +2125,7 @@ async def get_tg_online_sessions_for_period(
 
     query += " ORDER BY started_at DESC"
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
@@ -2097,7 +2141,7 @@ async def get_tg_online_sessions_for_period(
 
 async def get_open_session(chat_id: int, vk_id: int) -> dict | None:
     """Возвращает текущую незакрытую онлайн-сессию пользователя, если она есть."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT id, started_at
             FROM online_sessions
@@ -2118,7 +2162,7 @@ async def get_open_session(chat_id: int, vk_id: int) -> dict | None:
 
 async def start_online_session(chat_id: int, vk_id: int, started_at: int) -> int:
     """Создаёт новую онлайн-сессию и возвращает её ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute("""
             INSERT INTO online_sessions (chat_id, vk_id, started_at, ended_at)
             VALUES (?, ?, ?, NULL)
@@ -2128,45 +2172,40 @@ async def start_online_session(chat_id: int, vk_id: int, started_at: int) -> int
 
 
 async def end_online_session(chat_id: int, vk_id: int, ended_at: int) -> bool:
-    """Закрывает последнюю незакрытую онлайн-сессию пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    """Закрывает все незакрытые онлайн-сессии пользователя атомарно."""
+    async with get_db_connection() as db:
         cursor = await db.execute("""
             UPDATE online_sessions
             SET ended_at = ?
-            WHERE id = (
-                SELECT id
-                FROM online_sessions
-                WHERE chat_id = ? AND vk_id = ? AND ended_at IS NULL
-                ORDER BY started_at DESC
-                LIMIT 1
-            )
+            WHERE chat_id = ? AND vk_id = ? AND ended_at IS NULL
         """, (ended_at, chat_id, vk_id))
         await db.commit()
         return cursor.rowcount > 0
 
 
 async def ensure_open_session(chat_id: int, vk_id: int, started_at: int) -> bool:
-    """Гарантирует, что у пользователя есть открытая онлайн-сессия."""
-    existing = await get_open_session(chat_id, vk_id)
-    if existing is not None:
-        return False
-
-    await start_online_session(chat_id, vk_id, started_at)
-    return True
+    """Гарантирует, что у пользователя есть открытая онлайн-сессия атомарно."""
+    async with get_db_connection() as db:
+        cursor = await db.execute("""
+            INSERT INTO online_sessions (chat_id, vk_id, started_at, ended_at)
+            SELECT ?, ?, ?, NULL
+            WHERE NOT EXISTS (
+                SELECT 1 FROM online_sessions
+                WHERE chat_id = ? AND vk_id = ? AND ended_at IS NULL
+            )
+        """, (chat_id, vk_id, started_at, chat_id, vk_id))
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def close_open_session_if_exists(chat_id: int, vk_id: int, ended_at: int) -> bool:
-    """Закрывает открытую сессию, если она существует."""
-    existing = await get_open_session(chat_id, vk_id)
-    if existing is None:
-        return False
-
+    """Закрывает открытую сессию, если она существует (атомарно)."""
     return await end_online_session(chat_id, vk_id, ended_at)
 
 
 async def get_online_sessions(chat_id: int, vk_id: int, limit: int = 10) -> list[dict]:
     """Возвращает список онлайн-сессий пользователя, самые новые сверху."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute("""
             SELECT id, started_at, ended_at
             FROM online_sessions
@@ -2208,7 +2247,7 @@ async def get_online_sessions_for_period(
 
     query += " ORDER BY started_at DESC"
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 

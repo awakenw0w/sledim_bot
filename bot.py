@@ -64,6 +64,7 @@ async def main() -> None:
         except asyncio.CancelledError:
             pass
         await close_telegram_resolver()
+        await db.close_db()
         await bot.session.close()
         logger.info("Бот остановлен.")
 
