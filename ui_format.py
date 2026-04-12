@@ -125,7 +125,7 @@ TG_PROFILE_CHANGE_TYPE_ITEMS: list[tuple[str, str]] = [
     ("🖼️ Аватарка [TG]", "avatar"),
     ("🎁 Подарки [TG]", "gifts"),
     ("📝 Bio [TG]", "bio"),
-    ("🟡 Активность / last seen [TG]", "activity"),
+    ("⚪ Активность / last seen [TG]", "activity"),
     ("🟢🔴 Онлайн изменения [TG]", "online"),
 ]
 
@@ -289,7 +289,7 @@ def build_tg_status_label(detail: dict) -> str:
         return f"🔴 {status_text}"
 
     if detail.get("status_kind") in {"recently", "last_week", "last_month", "hidden"}:
-        return f"🟡 {status_text}"
+        return f"⚪ {status_text}"
 
     return status_text
 

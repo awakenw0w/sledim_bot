@@ -145,7 +145,7 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
     username_line = f"\nUsername: <code>@{escape_html(username)}</code>" if username else ""
     result_prefix = "Добавлен" if added else "Пользователь уже отслеживается, данные обновлены"
     await message.answer(
-        f"🟨 {result_prefix}: <b>{escape_html(display_name)}</b>\n"
+        f"⬜ {result_prefix}: <b>{escape_html(display_name)}</b>\n"
         f"ID: <code>{tg_user['telegram_user_id']}</code>{username_line}",
         reply_markup=main_menu_keyboard(),
     )

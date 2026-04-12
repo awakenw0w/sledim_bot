@@ -87,7 +87,7 @@ async def _show_vk_menu(message: Message) -> None:
 
 async def _show_tg_menu(message: Message) -> None:
     await message.answer(
-        "🟨 <b>Раздел Telegram [TG]</b>\n"
+        "⬜ <b>Раздел Telegram [TG]</b>\n"
         "Структура этого меню зеркальна VK-разделу. Здесь уже подключены базовые статусы, online-сессии, отчеты и уведомления без смешивания с VK.",
         reply_markup=platform_section_keyboard("tg"),
     )
