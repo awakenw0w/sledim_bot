@@ -30,24 +30,35 @@ from ui_callbacks import (
     UserActionCallback,
 )
 from ui_keyboards import (
+    BTN_ADD_USER_TG,
     BTN_ADD_USER,
     BTN_GENERAL_REPORT,
+    BTN_GENERAL_REPORT_TG,
+    BTN_GENERAL_REPORT_VK,
     BTN_HELP,
     BTN_NOTIFY,
+    BTN_NOTIFY_TG,
+    BTN_NOTIFY_VK,
     BTN_ONLINE_REPORT,
+    BTN_PLATFORM_TG,
+    BTN_PLATFORM_VK,
     BTN_PROFILE_CHANGES,
     BTN_SEARCH,
+    BTN_TRACKED_LIST_TG,
     BTN_TRACKED_LIST,
     CHANGE_NOTIFICATION_OPTIONS,
     back_main_inline_keyboard,
     delete_confirm_keyboard,
-    general_report_result_keyboard,
+    general_report_result_keyboard_with_target,
     main_menu_keyboard,
     notification_settings_keyboard,
+    notifications_hub_keyboard,
+    platform_section_keyboard,
     profile_change_period_keyboard,
     profile_change_result_keyboard,
     profile_change_type_keyboard,
     profile_change_user_keyboard,
+    reports_hub_keyboard,
     report_period_keyboard,
     report_result_keyboard,
     tracked_list_chunk_keyboard,
@@ -558,18 +569,31 @@ def _build_help_text(current_mode: str, change_settings: dict[str, bool]) -> str
     disabled_changes_text = ", ".join(disabled_change_labels) if disabled_change_labels else "ничего не отключено"
 
     return (
-        "🧭 Основной интерфейс теперь работает через кнопки внизу экрана.\n\n"
-        "<b>Как пользоваться:</b>\n"
-        f"• <b>{BTN_ADD_USER}</b> — бот попросит отправить ссылку на профиль VK\n"
-        f"• <b>{BTN_TRACKED_LIST}</b> — список отслеживаемых, карточка пользователя и отчеты по выбранному человеку\n"
-        f"• <b>{BTN_GENERAL_REPORT}</b> — краткая сводка по всем пользователям за период\n"
-        f"• <b>{BTN_NOTIFY}</b> — настройка онлайн-уведомлений и отдельных уведомлений об изменениях профиля\n"
-        f"• <b>{BTN_HELP}</b> — краткая памятка по интерфейсу\n\n"
-        "<b>📊 Как открыть отчет по одному человеку:</b>\n"
-        "• 📋 откройте список отслеживаемых\n"
-        "• 👤 нажмите на нужного человека или сразу на кнопку «📊 Отчет» рядом с ним\n"
-        "• 📝 выберите «📝 Изменения профиля» или «📈 Отчет по онлайну»\n"
-        "• 🗓️ затем выберите тип изменений и период, если это нужно\n\n"
+        "🧭 Бот работает с двумя платформами: ВКонтакте [VK] и Telegram [TG].\n"
+        "Интерфейс у разделов одинаковый по структуре, но данные и карточки пользователей разделены по платформам.\n\n"
+        "<b>Как пользоваться меню:</b>\n"
+        f"• <b>{BTN_PLATFORM_VK}</b> — открыть раздел ВКонтакте со своими действиями и отчетами\n"
+        f"• <b>{BTN_PLATFORM_TG}</b> — открыть раздел Telegram с зеркальным интерфейсом\n"
+        f"• <b>{BTN_GENERAL_REPORT}</b> — выбрать общий отчет верхнего уровня по платформе\n"
+        f"• <b>{BTN_NOTIFY}</b> — открыть верхний уровень настроек уведомлений по платформам\n"
+        f"• <b>{BTN_HELP}</b> — открыть эту справку\n\n"
+        "<b>Как открыть отчеты:</b>\n"
+        f"• для персонального отчета по VK зайдите в <b>{BTN_PLATFORM_VK}</b> → <b>{BTN_TRACKED_LIST}</b>\n"
+        "• откройте карточку нужного пользователя и выберите тип отчета\n"
+        f"• для общего отчета используйте <b>{BTN_GENERAL_REPORT}</b> и затем нужную платформу\n"
+        "• персональные отчеты VK и TG не смешиваются между собой\n\n"
+        "<b>Как работают уведомления:</b>\n"
+        f"• в разделе <b>{BTN_NOTIFY_VK}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна и изменениях профиля VK\n"
+        f"• раздел <b>{BTN_NOTIFY_TG}</b> уже подготовлен интерфейсно, но глубокая логика Telegram пока не подключена\n"
+        "• если уведомления не приходят, проверьте, что отслеживание включено и что нужный режим уведомлений не отключен\n\n"
+        "<b>Почему время онлайна может иметь погрешность:</b>\n"
+        "• бот опрашивает платформу с интервалом, поэтому короткие входы и выходы могут округляться или фиксироваться с небольшой задержкой\n"
+        "• на точность также влияют ограничения самой платформы и сетевые задержки\n\n"
+        "<b>Если уведомления не приходят:</b>\n"
+        "• проверьте настройки уведомлений в боте\n"
+        "• убедитесь, что пользователь действительно добавлен в отслеживание в нужной платформе\n"
+        "• если проблема в VK сохраняется, попробуйте заново открыть карточку пользователя или повторно добавить его\n"
+        "• если проблема в TG, учитывайте, что Telegram-ветка пока подготовлена как интерфейсный каркас\n\n"
         "<b>⌨️ Резервные команды:</b>\n"
         "/start — 🏠 открыть главное меню\n"
         "/help — ❓ подробная справка\n"
@@ -593,7 +617,7 @@ async def _show_main_menu(message: Message, text: str | None = None) -> None:
         text
         or (
             "🏠 Главное меню.\n"
-            "👇 Выберите действие кнопками ниже. Команды тоже доступны, но они нужны скорее как запасной вариант."
+            "Сначала выберите платформу или общий раздел ниже."
         ),
         reply_markup=main_menu_keyboard(),
     )
@@ -605,25 +629,74 @@ async def _show_help(message: Message) -> None:
     await message.answer(_build_help_text(current_mode, change_settings), reply_markup=main_menu_keyboard())
 
 
-async def _show_add_prompt(message: Message, state: FSMContext) -> None:
+async def _show_vk_menu(message: Message) -> None:
+    await message.answer(
+        "🟦 <b>Раздел ВКонтакте [VK]</b>\n"
+        "Все действия в этом меню относятся только к VK-данным и VK-отчетам.",
+        reply_markup=platform_section_keyboard("vk"),
+    )
+
+
+async def _show_tg_menu(message: Message) -> None:
+    await message.answer(
+        "🟨 <b>Раздел Telegram [TG]</b>\n"
+        "Структура этого меню зеркальна VK-разделу. Telegram-логика пока подготовлена как интерфейсный каркас без ложных данных.",
+        reply_markup=platform_section_keyboard("tg"),
+    )
+
+
+async def _show_reports_hub(message: Message) -> None:
+    await message.answer(
+        "📊 <b>Общий отчет</b>\n"
+        "Выберите платформу. Персональные данные VK и TG здесь не смешиваются.",
+        reply_markup=reports_hub_keyboard(),
+    )
+
+
+async def _show_notifications_hub(message: Message) -> None:
+    await message.answer(
+        "🔔 <b>Настройки уведомлений</b>\n"
+        "Выберите платформу, для которой хотите открыть настройки.",
+        reply_markup=notifications_hub_keyboard(),
+    )
+
+
+async def _show_add_prompt(message: Message, state: FSMContext, back_target: str = "vk_menu") -> None:
     await state.set_state(AddUserStates.waiting_for_vk_link)
     await message.answer(
-        "➕ Отправьте ссылку на пользователя VK, которого нужно добавить в отслеживание.\n"
+        "➕ Отправьте данные пользователя ВКонтакте [VK], которого нужно добавить в отслеживание.\n"
         "Поддерживаются форматы:\n"
+        "• <code>123456789</code>\n"
+        "• <code>durov</code>\n"
+        "• <code>@durov</code>\n"
         "• <code>vk.com/durov</code>\n"
         "• <code>https://vk.com/durov</code>\n"
         "• <code>vk.ru/durov</code>\n"
         "• <code>https://vk.ru/durov</code>",
-        reply_markup=back_main_inline_keyboard("main"),
+        reply_markup=back_main_inline_keyboard(back_target),
     )
 
 
-async def _show_search_prompt(message: Message, state: FSMContext) -> None:
+async def _show_tg_add_prompt(message: Message, state: FSMContext) -> None:
+    await state.set_state(AddUserStates.waiting_for_tg_link)
+    await message.answer(
+        "➕ Отправьте данные пользователя Telegram [TG], которого хотите добавить.\n"
+        "Интерфейс уже подготовлен, а глубокая логика мониторинга Telegram пока не подключена.\n\n"
+        "Можно отправить:\n"
+        "• <code>username</code>\n"
+        "• <code>@username</code>\n"
+        "• ссылку вида <code>t.me/username</code>\n\n"
+        "После получения бот честно сообщит, что TG-ветка пока работает как интерфейсный каркас.",
+        reply_markup=back_main_inline_keyboard("tg_menu"),
+    )
+
+
+async def _show_search_prompt(message: Message, state: FSMContext, back_target: str = "vk_menu") -> None:
     await state.set_state(SearchStates.waiting_for_query)
     await state.update_data(search_query="")
     await message.answer(
         "🔎 Введите имя, фамилию или полное имя пользователя, которого нужно найти среди отслеживаемых.",
-        reply_markup=back_main_inline_keyboard("main"),
+        reply_markup=back_main_inline_keyboard(back_target),
     )
 
 
@@ -768,18 +841,31 @@ async def _show_profile_change_report(message: Message, vk_id: int, change_key: 
     )
 
 
-async def _show_notification_settings(message: Message, text: str | None = None) -> None:
+async def _show_notification_settings(
+    message: Message,
+    text: str | None = None,
+    back_target: str = "notification_hub",
+) -> None:
     current_mode = await db.get_notification_mode(message.chat.id)
     change_settings = await db.get_change_notification_settings(message.chat.id)
     await message.answer(
         text
         or (
-            "🔔 Здесь можно отдельно настроить:\n"
+            "🔔 Здесь можно отдельно настроить уведомления ВКонтакте [VK]:\n"
             "• 🟢🔴 уведомления о входе и выходе из онлайна\n"
             "• 📝 уведомления о не-онлайн изменениях профиля\n\n"
             "👇 Нажмите на нужную кнопку, чтобы изменить настройку."
         ),
-        reply_markup=notification_settings_keyboard(current_mode, change_settings),
+        reply_markup=notification_settings_keyboard(current_mode, change_settings, back_target=back_target),
+    )
+
+
+async def _show_tg_placeholder(message: Message, title: str, back_target: str = "tg_menu") -> None:
+    await message.answer(
+        f"{title}\n"
+        "Telegram-ветка уже добавлена в интерфейс и навигацию, но глубокая логика мониторинга пока не реализована.\n"
+        "Здесь не показываются вымышленные данные: этот экран служит честной заглушкой под будущую TG-логику.",
+        reply_markup=back_main_inline_keyboard(back_target),
     )
 
 
@@ -788,7 +874,7 @@ async def _show_tracked_users_screen(message: Message) -> None:
     if not snapshots:
         await message.answer(
             "📋 Список отслеживаемых пользователей пуст.\n"
-            "Добавьте пользователя через кнопку «Добавить пользователя» или команду /add.",
+            "Добавьте пользователя через кнопку «Добавить пользователя [VK]» или команду /add.",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -797,7 +883,7 @@ async def _show_tracked_users_screen(message: Message) -> None:
         message,
         snapshots=snapshots,
         source=SOURCE_LIST,
-        title="<b>📋 Список отслеживаемых пользователей</b>",
+        title="<b>📋 Список отслеживаемых пользователей [VK]</b>",
     )
 
 
@@ -813,7 +899,7 @@ async def _show_user_report_menu(message: Message, vk_id: int, source: str) -> N
     await message.answer(
         "\n".join(
             [
-                "<b>📊 Отчеты по пользователю</b>",
+                "<b>📊 Отчеты по пользователю [VK]</b>",
                 f"👤 <b>{_escape_html(snapshot['name'])}</b>",
                 f"🪪 ID: <code>{snapshot['vk_id']}</code>",
                 "👇 Выберите, какой отчет нужно показать.",
@@ -838,7 +924,7 @@ async def _show_online_report_user_picker(message: Message) -> None:
         chunk = items[start:start + 20]
         await message.answer(
             "📈 Выберите пользователя, по которому нужен отчет по онлайну.",
-            reply_markup=user_picker_keyboard(chunk, source=SOURCE_ONLINE_REPORT, back_target="main"),
+            reply_markup=user_picker_keyboard(chunk, source=SOURCE_ONLINE_REPORT, back_target="vk_menu"),
         )
 
 
@@ -853,8 +939,8 @@ async def _show_general_report_period_picker(message: Message) -> None:
         return
 
     await message.answer(
-        "📊 Выберите период для общего отчета.",
-        reply_markup=report_period_keyboard(scope="all", vk_id=0, source="all", back_target="main"),
+        "📊 Выберите период для общего отчета [VK].",
+        reply_markup=report_period_keyboard(scope="all", vk_id=0, source="all", back_target="general_reports_hub"),
     )
 
 
@@ -1180,7 +1266,10 @@ async def _resolve_vk_user_from_link(raw_link: str) -> dict[str, Any] | None:
 
 def _vk_link_formats_text() -> str:
     return (
-        "Поддерживаются только ссылки вида:\n"
+        "Поддерживаются форматы:\n"
+        "• <code>123456789</code>\n"
+        "• <code>durov</code>\n"
+        "• <code>@durov</code>\n"
         "• <code>vk.com/durov</code>\n"
         "• <code>https://vk.com/durov</code>\n"
         "• <code>vk.ru/durov</code>\n"
@@ -1192,6 +1281,52 @@ async def _show_screen_by_nav_target(message: Message, target: str, state: FSMCo
     if target == "main":
         await state.clear()
         await _show_main_menu(message)
+        return
+    if target == "vk_menu":
+        await state.clear()
+        await _show_vk_menu(message)
+        return
+    if target == "tg_menu":
+        await state.clear()
+        await _show_tg_menu(message)
+        return
+    if target == "general_reports_hub":
+        await state.clear()
+        await _show_reports_hub(message)
+        return
+    if target == "general_report_vk_period":
+        await state.clear()
+        await _show_general_report_period_picker(message)
+        return
+    if target == "notification_hub":
+        await state.clear()
+        await _show_notifications_hub(message)
+        return
+    if target == "notify_vk":
+        await state.clear()
+        await _show_notification_settings(message, back_target="notification_hub")
+        return
+    if target == "notify_tg":
+        await state.clear()
+        await _show_tg_placeholder(message, "🔔 <b>Настройки уведомлений [TG]</b>", back_target="notification_hub")
+        return
+    if target == "vk_add":
+        await _show_add_prompt(message, state)
+        return
+    if target == "vk_list":
+        await state.clear()
+        await _show_tracked_users_screen(message)
+        return
+    if target == "tg_add":
+        await _show_tg_add_prompt(message, state)
+        return
+    if target == "tg_list":
+        await state.clear()
+        await _show_tg_placeholder(message, "📋 <b>Список отслеживаемых [TG]</b>")
+        return
+    if target == "tg_general_report":
+        await state.clear()
+        await _show_tg_placeholder(message, "📊 <b>Общий отчет [TG]</b>", back_target="general_reports_hub")
         return
     if target == "list":
         await state.clear()
@@ -1218,7 +1353,7 @@ async def _show_screen_by_nav_target(message: Message, target: str, state: FSMCo
         return
     if target == "notify":
         await state.clear()
-        await _show_notification_settings(message)
+        await _show_notifications_hub(message)
         return
     if target == "help":
         await state.clear()
@@ -1254,15 +1389,14 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await _show_main_menu(
         message,
         text=(
-            "👋 Привет. Я бот для мониторинга активности пользователей ВКонтакте.\n\n"
-            "✨ Я могу:\n"
-            "— 🟢🔴 отслеживать онлайн и офлайн\n"
-            "— 🕒 сохранять историю входов и выходов\n"
-            "— 📊 показывать общий отчет по отслеживаемым\n"
-            "— 📈 строить отчеты по онлайну и 📝 изменениям профиля для конкретного человека\n"
-            "— 🔔 присылать уведомления не только по онлайну, но и по изменениям профиля\n\n"
-            "👇 Управление сделано через кнопки ниже.\n\n"
-            "Чтобы начать, нажмите «➕ Добавить пользователя» и отправьте ссылку на профиль VK."
+            "👋 Привет. Это бот с раздельным интерфейсом для двух платформ.\n\n"
+            "Сначала выберите нужный раздел:\n"
+            f"• <b>{BTN_PLATFORM_VK}</b> — все действия только по ВКонтакте\n"
+            f"• <b>{BTN_PLATFORM_TG}</b> — интерфейс Telegram-ветки без ложных данных\n"
+            f"• <b>{BTN_GENERAL_REPORT}</b> — общие отчеты верхнего уровня по платформам\n"
+            f"• <b>{BTN_NOTIFY}</b> — настройки уведомлений по платформам\n"
+            f"• <b>{BTN_HELP}</b> — справка по новому интерфейсу\n\n"
+            "Карточки пользователей и персональные отчеты VK и TG между собой не смешиваются."
         ),
     )
 
@@ -1273,15 +1407,38 @@ async def cmd_help(message: Message, state: FSMContext) -> None:
     await _show_help(message)
 
 
+@router.message(F.text == BTN_PLATFORM_VK)
+async def menu_platform_vk(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _show_vk_menu(message)
+
+
+@router.message(F.text == BTN_PLATFORM_TG)
+async def menu_platform_tg(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _show_tg_menu(message)
+
+
 @router.message(F.text == BTN_ADD_USER)
 async def menu_add_user(message: Message, state: FSMContext) -> None:
     await _show_add_prompt(message, state)
+
+
+@router.message(F.text == BTN_ADD_USER_TG)
+async def menu_add_user_tg(message: Message, state: FSMContext) -> None:
+    await _show_tg_add_prompt(message, state)
 
 
 @router.message(F.text == BTN_TRACKED_LIST)
 async def menu_tracked_list(message: Message, state: FSMContext) -> None:
     await state.clear()
     await _show_tracked_users_screen(message)
+
+
+@router.message(F.text == BTN_TRACKED_LIST_TG)
+async def menu_tracked_list_tg(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _show_tg_placeholder(message, "📋 <b>Список отслеживаемых [TG]</b>")
 
 
 @router.message(F.text == BTN_ONLINE_REPORT)
@@ -1293,7 +1450,19 @@ async def menu_online_report(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_GENERAL_REPORT)
 async def menu_general_report(message: Message, state: FSMContext) -> None:
     await state.clear()
+    await _show_reports_hub(message)
+
+
+@router.message(F.text == BTN_GENERAL_REPORT_VK)
+async def menu_general_report_vk(message: Message, state: FSMContext) -> None:
+    await state.clear()
     await _show_general_report_period_picker(message)
+
+
+@router.message(F.text == BTN_GENERAL_REPORT_TG)
+async def menu_general_report_tg(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _show_tg_placeholder(message, "📊 <b>Общий отчет [TG]</b>", back_target="general_reports_hub")
 
 
 @router.message(F.text == BTN_SEARCH)
@@ -1304,7 +1473,19 @@ async def menu_search(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_NOTIFY)
 async def menu_notify(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await _show_notification_settings(message)
+    await _show_notifications_hub(message)
+
+
+@router.message(F.text == BTN_NOTIFY_VK)
+async def menu_notify_vk(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _show_notification_settings(message, back_target="notification_hub")
+
+
+@router.message(F.text == BTN_NOTIFY_TG)
+async def menu_notify_tg(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _show_tg_placeholder(message, "🔔 <b>Настройки уведомлений [TG]</b>", back_target="notification_hub")
 
 
 @router.message(F.text == BTN_PROFILE_CHANGES)
@@ -1336,6 +1517,7 @@ async def cb_notify_mode(callback: CallbackQuery, callback_data: NotifyModeCallb
     await _show_notification_settings(
         callback.message,
         text=f"🔔 Режим онлайн-уведомлений обновлен: <b>{NOTIFICATION_MODE_LABELS[mode]}</b>",
+        back_target="notification_hub",
     )
 
 
@@ -1351,6 +1533,7 @@ async def cb_notify_toggle(callback: CallbackQuery, callback_data: NotifyToggleC
     await _show_notification_settings(
         callback.message,
         text=f"🔔 Уведомления по категории <b>{_escape_html(label)}</b> {status_text}.",
+        back_target="notification_hub",
     )
 
 
@@ -1502,7 +1685,7 @@ async def cb_period_select(callback: CallbackQuery, callback_data: PeriodSelectC
         await _send_long_html(callback.message, blocks)
         await callback.message.answer(
             "📊 Что дальше?",
-            reply_markup=general_report_result_keyboard(),
+            reply_markup=general_report_result_keyboard_with_target("general_report_vk_period"),
         )
         return
 
@@ -1527,7 +1710,7 @@ async def cmd_notify(message: Message, state: FSMContext) -> None:
     await state.clear()
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await _show_notification_settings(message)
+        await _show_notification_settings(message, back_target="notification_hub")
         return
 
     requested_mode = parts[1].strip().lower()
@@ -1544,6 +1727,7 @@ async def cmd_notify(message: Message, state: FSMContext) -> None:
     await _show_notification_settings(
         message,
         text=f"🔔 Режим онлайн-уведомлений обновлен: <b>{NOTIFICATION_MODE_LABELS[mode]}</b>",
+        back_target="notification_hub",
     )
 
 
@@ -1588,6 +1772,24 @@ async def state_add_user(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Проверяю пользователя ВКонтакте...")
     await _perform_add_user(message, user)
+
+
+@router.message(StateFilter(AddUserStates.waiting_for_tg_link), F.text)
+async def state_add_user_tg(message: Message, state: FSMContext) -> None:
+    raw_value = (message.text or "").strip()
+    if not raw_value:
+        await message.answer(
+            "Нужно отправить username, @username или ссылку на Telegram-профиль.",
+            reply_markup=back_main_inline_keyboard("tg_menu"),
+        )
+        return
+
+    await state.clear()
+    await message.answer(
+        "🟨 Telegram-пользователь принят на интерфейсном уровне.\n"
+        "Глубокая логика мониторинга Telegram пока не реализована, поэтому пользователь еще не будет добавлен в реальное отслеживание.",
+        reply_markup=back_main_inline_keyboard("tg_menu"),
+    )
 
 
 @router.message(Command("remove"))
