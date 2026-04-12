@@ -1,0 +1,60 @@
+"""
+Конфигурация бота — читает переменные окружения из .env файла.
+"""
+
+import logging
+import os
+from dotenv import load_dotenv
+
+# Загружаем переменные из .env файла
+load_dotenv()
+logger = logging.getLogger(__name__)
+
+# Токен Telegram-бота (получить у @BotFather)
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "8675165649:AAEL62eT8agqHocWliVeDZ55-5kbAjOTZVA")
+
+# Токен доступа VK API (сервисный ключ приложения или токен пользователя)
+VK_ACCESS_TOKEN: str = os.getenv("VK_ACCESS_TOKEN", "vk1.a.-9XzQ9WFnEB1Oq-FHivf_gt53J24bPGSgdJejDAVMY2O7sIiS2YrFz_dfRFHg6W_13gGOhTQe7T57wkEYSqO63H2qe4-AJDUaADkO4e_Rcy2OSRrX2h_H5Giij4Ts0DVM-mYmq6aCDe2MeAEvADJ99eXNwaG1ndlxCH0-eaBY2dZK0OQq1MfGKunuMX_liwByufmqrglGxM5KLmj4wf-UQ")
+
+# Версия VK API
+VK_API_VERSION: str = os.getenv("VK_API_VERSION", "5.131")
+
+# Путь к файлу базы данных SQLite
+DB_PATH: str = os.getenv("DB_PATH", "bot_database.db")
+
+# Интервал проверки онлайн-статуса (в секундах)
+ONLINE_CHECK_INTERVAL: int = int(os.getenv("ONLINE_CHECK_INTERVAL", "60"))
+
+# Интервал проверки не-онлайн изменений профиля (в секундах)
+PROFILE_CHECK_INTERVAL: int = int(os.getenv("PROFILE_CHECK_INTERVAL", "7200"))
+
+# Старое имя переменной оставлено только для обратной совместимости с кодом,
+# который мог импортировать CHECK_INTERVAL раньше.
+CHECK_INTERVAL: int = ONLINE_CHECK_INTERVAL
+
+# Обязательная подписка на Telegram-канал.
+# Для приватного канала нужен числовой chat_id вида -100..., одной invite-ссылки
+# недостаточно для проверки подписки через Bot API.
+REQUIRED_CHANNEL_LINK: str = os.getenv(
+    "REQUIRED_CHANNEL_LINK",
+    "https://t.me/+wAHMwnsycOljNjA6",
+)
+REQUIRED_CHANNEL_ID_RAW: str = os.getenv("REQUIRED_CHANNEL_ID", "-1003957805588").strip()
+
+REQUIRED_CHANNEL_ID: int | None = None
+if REQUIRED_CHANNEL_ID_RAW:
+    if REQUIRED_CHANNEL_ID_RAW.startswith("-100"):
+        REQUIRED_CHANNEL_ID = int(REQUIRED_CHANNEL_ID_RAW)
+    else:
+        logger.warning(
+            "REQUIRED_CHANNEL_ID=%s выглядит некорректно. "
+            "Для канала нужен chat_id в формате -100..., иначе проверка подписки не сработает.",
+            REQUIRED_CHANNEL_ID_RAW,
+        )
+
+# Проверка обязательных переменных
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("Переменная TELEGRAM_BOT_TOKEN не задана в .env файле")
+
+if not VK_ACCESS_TOKEN:
+    raise ValueError("Переменная VK_ACCESS_TOKEN не задана в .env файле")
