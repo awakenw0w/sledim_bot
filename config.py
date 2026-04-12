@@ -34,7 +34,7 @@ TELEGRAM_USERBOT_SESSION_FILE: str = os.getenv("TELEGRAM_USERBOT_SESSION_FILE", 
 ONLINE_CHECK_INTERVAL: int = int(os.getenv("ONLINE_CHECK_INTERVAL", "60"))
 
 # Интервал проверки не-онлайн изменений профиля (в секундах)
-PROFILE_CHECK_INTERVAL: int = int(os.getenv("PROFILE_CHECK_INTERVAL", "30"))
+PROFILE_CHECK_INTERVAL: int = int(os.getenv("PROFILE_CHECK_INTERVAL", "3600"))
 
 # Старое имя переменной оставлено только для обратной совместимости с кодом,
 # который мог импортировать CHECK_INTERVAL раньше.
