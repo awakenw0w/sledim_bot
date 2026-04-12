@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import hashlib
 import html
 import logging
 import time
@@ -713,19 +714,22 @@ async def _check_online_and_notify(bot: Bot) -> None:
                 if not _should_send_status_notification(notification_mode, new_online):
                     continue
 
-                await bot.send_message(
-                    chat_id,
-                    message_text,
+                m_hash = hashlib.md5(f"vk_status|{chat_id}|{vk_id}|{new_online}|{now_ts}".encode()).hexdigest()
+                await db.enqueue_outbox_message(
+                    source="vk",
+                    chat_id=chat_id,
+                    text=message_text,
+                    message_hash=m_hash,
                     parse_mode="HTML",
-                    disable_web_page_preview=True,
+                    disable_preview=True,
                 )
                 logger.info(
-                    "Уведомление отправлено: chat_id=%s, vk_id=%s, online=%s",
+                    "Уведомление отправлено в очередь: chat_id=%s, vk_id=%s, online=%s",
                     chat_id, vk_id, new_online,
                 )
             except Exception as exc:
                 logger.error(
-                    "Не удалось отправить уведомление chat_id=%s, vk_id=%s: %s",
+                    "Не удалось добавить уведомление в очередь chat_id=%s, vk_id=%s: %s",
                     chat_id, vk_id, exc,
                 )
 
@@ -809,19 +813,22 @@ async def _check_profile_and_notify(bot: Bot) -> None:
                         now_ts,
                         detail_lines=filtered_detail_lines,
                     )
-                    await bot.send_message(
-                        chat_id,
-                        profile_message_text,
+                    m_hash = hashlib.md5(f"vk_profile|{chat_id}|{vk_id}|{now_ts}".encode()).hexdigest()
+                    await db.enqueue_outbox_message(
+                        source="vk",
+                        chat_id=chat_id,
+                        text=profile_message_text,
+                        message_hash=m_hash,
                         parse_mode="HTML",
-                        disable_web_page_preview=True,
+                        disable_preview=True,
                     )
                     logger.info(
-                        "Уведомление об изменении профиля отправлено: chat_id=%s, vk_id=%s, changes=%s",
+                        "Уведомление об изменении профиля отправлено в очередь: chat_id=%s, vk_id=%s, changes=%s",
                         chat_id, vk_id, len(profile_changes_for_message),
                     )
                 except Exception as exc:
                     logger.error(
-                        "Не удалось отправить уведомление об изменении профиля chat_id=%s, vk_id=%s: %s",
+                        "Не удалось добавить в очередь уведомление об изменении профиля chat_id=%s, vk_id=%s: %s",
                         chat_id, vk_id, exc,
                     )
 
@@ -840,15 +847,18 @@ async def _check_profile_and_notify(bot: Bot) -> None:
                         change_settings = await _get_change_settings(chat_id)
                         if not bool(change_settings.get("relations", True)):
                             continue
-                        await bot.send_message(
-                            chat_id,
-                            relation_message_text,
+                        m_hash = hashlib.md5(f"vk_relation|{chat_id}|{vk_id}|{event['list_type']}|{now_ts}".encode()).hexdigest()
+                        await db.enqueue_outbox_message(
+                            source="vk",
+                            chat_id=chat_id,
+                            text=relation_message_text,
+                            message_hash=m_hash,
                             parse_mode="HTML",
-                            disable_web_page_preview=True,
+                            disable_preview=True,
                         )
                     except Exception as exc:
                         logger.error(
-                            "Не удалось отправить уведомление по списку связей chat_id=%s, vk_id=%s: %s",
+                            "Не удалось добавить уведомление по списку связей в очередь chat_id=%s, vk_id=%s: %s",
                             chat_id, vk_id, exc,
                         )
         if new_wall_posts:
@@ -863,19 +873,22 @@ async def _check_profile_and_notify(bot: Bot) -> None:
                     change_settings = await _get_change_settings(chat_id)
                     if not bool(change_settings.get("posts", True)):
                         continue
-                    await bot.send_message(
-                        chat_id,
-                        wall_message_text,
+                    m_hash = hashlib.md5(f"vk_posts|{chat_id}|{vk_id}|{now_ts}".encode()).hexdigest()
+                    await db.enqueue_outbox_message(
+                        source="vk",
+                        chat_id=chat_id,
+                        text=wall_message_text,
+                        message_hash=m_hash,
                         parse_mode="HTML",
-                        disable_web_page_preview=True,
+                        disable_preview=True,
                     )
                     logger.info(
-                        "Уведомление о новых постах отправлено: chat_id=%s, vk_id=%s, posts=%s",
+                        "Уведомление о новых постах отправлено в очередь: chat_id=%s, vk_id=%s, posts=%s",
                         chat_id, vk_id, len(new_wall_posts),
                     )
                 except Exception as exc:
                     logger.error(
-                        "Не удалось отправить уведомление о новых постах chat_id=%s, vk_id=%s: %s",
+                        "Не удалось добавить пост-уведомление в очередь chat_id=%s, vk_id=%s: %s",
                         chat_id, vk_id, exc,
                     )
 

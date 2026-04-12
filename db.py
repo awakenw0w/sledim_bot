@@ -389,7 +389,29 @@ async def init_db() -> None:
             await _ensure_column(db, "tg_last_status", "activity_at", "INTEGER")
 
             await db.execute("PRAGMA user_version = 1")
-        
+
+        # Версия 1 -> 2: Outbox Pattern
+        if current_version < 2:
+            logger.info("Running migration to schema version 2 (Outbox)...")
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS outbox_messages (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source          TEXT NOT NULL,
+                    chat_id         INTEGER NOT NULL,
+                    text            TEXT NOT NULL,
+                    parse_mode      TEXT,
+                    disable_preview INTEGER NOT NULL DEFAULT 1,
+                    message_hash    TEXT NOT NULL,
+                    status          TEXT NOT NULL DEFAULT 'pending',
+                    attempt_count   INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at   INTEGER NOT NULL DEFAULT 0,
+                    last_error      TEXT,
+                    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                    sent_at         TEXT
+                )
+            """)
+            await db.execute("PRAGMA user_version = 2")
+
         # Индексы (идемпотентные)
         logger.info("Verifying database indices...")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_online_sessions_chat_vk ON online_sessions(chat_id, vk_id, started_at)")
@@ -398,6 +420,7 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tg_profile_history_tg_type ON tg_profile_change_history(telegram_user_id, change_type)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tracked_users_active ON tracked_users(chat_id, is_active)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tg_tracked_users_active ON tg_tracked_users(chat_id, is_active)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_messages(status, next_retry_at)")
 
         await db.commit()
 
@@ -2259,3 +2282,110 @@ async def get_online_sessions_for_period(
         }
         for row in rows
     ]
+
+
+async def enqueue_outbox_message(
+    source: str,
+    chat_id: int,
+    text: str,
+    message_hash: str,
+    parse_mode: str | None = "HTML",
+    disable_preview: bool = True,
+) -> None:
+    """Очередизация сообщения, если нет такого же message_hash в состояниях pending/retry."""
+    async with get_db_connection() as db:
+        async with db.execute(
+            """
+            SELECT id FROM outbox_messages 
+            WHERE message_hash = ? AND status IN ('pending', 'retry') 
+            LIMIT 1
+            """,
+            (message_hash,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            
+        if row is not None:
+            # Уже есть в очереди, дубликат не добавляем
+            return
+
+        await db.execute(
+            """
+            INSERT INTO outbox_messages (
+                source, chat_id, text, parse_mode, disable_preview, message_hash
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (source, chat_id, text, parse_mode, 1 if disable_preview else 0, message_hash)
+        )
+        await db.commit()
+
+
+async def get_pending_outbox_messages(limit: int = 20) -> list[dict]:
+    """Возвращает список сообщений для отправки (статусы pending и retry, если пришло их время)."""
+    now_ts = int(time.time())
+    async with get_db_connection() as db:
+        async with db.execute(
+            """
+            SELECT id, source, chat_id, text, parse_mode, disable_preview, attempt_count
+            FROM outbox_messages
+            WHERE status IN ('pending', 'retry') AND next_retry_at <= ?
+            ORDER BY next_retry_at ASC, id ASC
+            LIMIT ?
+            """,
+            (now_ts, limit)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            
+    return [
+        {
+            "id": row[0],
+            "source": row[1],
+            "chat_id": row[2],
+            "text": row[3],
+            "parse_mode": row[4],
+            "disable_preview": bool(row[5]),
+            "attempt_count": row[6],
+        }
+        for row in rows
+    ]
+
+
+async def mark_outbox_message_sent(message_id: int) -> None:
+    """Помечает сообщение как отправленное."""
+    async with get_db_connection() as db:
+        await db.execute(
+            """
+            UPDATE outbox_messages
+            SET status = 'sent', sent_at = datetime('now')
+            WHERE id = ?
+            """,
+            (message_id,)
+        )
+        await db.commit()
+
+
+async def mark_outbox_message_failed(message_id: int, last_error: str) -> None:
+    """Помечает сообщение как failed навсегда (например, из-за блокировки или лимита)."""
+    async with get_db_connection() as db:
+        await db.execute(
+            """
+            UPDATE outbox_messages
+            SET status = 'failed', last_error = ?
+            WHERE id = ?
+            """,
+            (str(last_error), message_id)
+        )
+        await db.commit()
+
+
+async def schedule_outbox_message_retry(message_id: int, next_retry_at: int, attempt_count: int, last_error: str) -> None:
+    """Откладывает отправку на будущее (status='retry')."""
+    async with get_db_connection() as db:
+        await db.execute(
+            """
+            UPDATE outbox_messages
+            SET status = 'retry', next_retry_at = ?, attempt_count = ?, last_error = ?
+            WHERE id = ?
+            """,
+            (next_retry_at, attempt_count, str(last_error), message_id)
+        )
+        await db.commit()

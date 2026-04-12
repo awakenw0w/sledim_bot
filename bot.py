@@ -15,6 +15,7 @@ from handlers import router
 from telegram_monitor import run_telegram_monitor
 from telegram_resolver import close_telegram_resolver
 from tracker import run_tracker
+from outbox_worker import run_outbox_worker
 
 # Настройка логирования: уровень INFO, формат с временем и именем модуля
 logging.basicConfig(
@@ -46,15 +47,17 @@ async def main() -> None:
     # Запускаем трекер как фоновую asyncio-задачу
     tracker_task = asyncio.create_task(run_tracker(bot))
     telegram_monitor_task = asyncio.create_task(run_telegram_monitor(bot))
+    outbox_task = asyncio.create_task(run_outbox_worker(bot))
     logger.info("Бот запущен. Ожидаю сообщения...")
 
     try:
         # Запускаем polling (бесконечный цикл получения обновлений от Telegram)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        # При остановке (Ctrl+C или другой сигнал) отменяем задачу трекера
+        # При остановке (Ctrl+C или другой сигнал) отменяем задачи трекеров и воркера
         tracker_task.cancel()
         telegram_monitor_task.cancel()
+        outbox_task.cancel()
         try:
             await tracker_task
         except asyncio.CancelledError:
@@ -63,12 +66,14 @@ async def main() -> None:
             await telegram_monitor_task
         except asyncio.CancelledError:
             pass
+        try:
+            await outbox_task
+        except asyncio.CancelledError:
+            pass
         await close_telegram_resolver()
         await db.close_db()
         await bot.session.close()
         logger.info("Бот остановлен.")
-
-
 if __name__ == "__main__":
     try:
         asyncio.run(main())

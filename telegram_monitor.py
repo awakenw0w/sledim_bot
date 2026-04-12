@@ -8,6 +8,7 @@ online/activity, фиксирует изменения профиля и отп�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
 import time
@@ -566,15 +567,18 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
                     filtered_changes = _filter_profile_changes_by_settings(deduplicated_changes, settings)
                     if not filtered_changes:
                         continue
-                    await bot.send_message(
-                        chat_id,
-                        _build_profile_change_notification(snapshot, filtered_changes),
+                    m_hash = hashlib.md5(f"tg_profile|{chat_id}|{telegram_user_id}|{now_ts}".encode()).hexdigest()
+                    await db.enqueue_outbox_message(
+                        source="tg",
+                        chat_id=chat_id,
+                        text=_build_profile_change_notification(snapshot, filtered_changes),
+                        message_hash=m_hash,
                         parse_mode="HTML",
-                        disable_web_page_preview=True,
+                        disable_preview=True,
                     )
                 except Exception as exc:
                     logger.error(
-                        "Не удалось отправить TG уведомление об изменениях профиля chat_id=%s, telegram_user_id=%s: %s",
+                        "Не удалось добавить TG уведомление об изменениях профиля в очередь chat_id=%s, telegram_user_id=%s: %s",
                         chat_id,
                         telegram_user_id,
                         exc,
@@ -595,15 +599,18 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
                         notification_mode = await _get_tg_mode(chat_id)
                         if not _should_send_status_notification(notification_mode, bool(snapshot.is_online)):
                             continue
-                        await bot.send_message(
-                            chat_id,
-                            notification_text,
+                        m_hash = hashlib.md5(f"tg_status|{chat_id}|{telegram_user_id}|{snapshot.is_online}|{now_ts}".encode()).hexdigest()
+                        await db.enqueue_outbox_message(
+                            source="tg",
+                            chat_id=chat_id,
+                            text=notification_text,
+                            message_hash=m_hash,
                             parse_mode="HTML",
-                            disable_web_page_preview=True,
+                            disable_preview=True,
                         )
                     except Exception as exc:
                         logger.error(
-                            "Не удалось отправить TG статус-уведомление chat_id=%s, telegram_user_id=%s: %s",
+                            "Не удалось добавить TG статус-уведомление в очередь chat_id=%s, telegram_user_id=%s: %s",
                             chat_id,
                             telegram_user_id,
                             exc,
@@ -621,15 +628,18 @@ async def _check_telegram_and_notify(bot: Bot) -> None:
                     try:
                         if not await _get_tg_activity_enabled(chat_id):
                             continue
-                        await bot.send_message(
-                            chat_id,
-                            activity_text,
+                        m_hash = hashlib.md5(f"tg_activity|{chat_id}|{telegram_user_id}|{snapshot.activity_at}|{now_ts}".encode()).hexdigest()
+                        await db.enqueue_outbox_message(
+                            source="tg",
+                            chat_id=chat_id,
+                            text=activity_text,
+                            message_hash=m_hash,
                             parse_mode="HTML",
-                            disable_web_page_preview=True,
+                            disable_preview=True,
                         )
                     except Exception as exc:
                         logger.error(
-                            "Не удалось отправить TG activity-уведомление chat_id=%s, telegram_user_id=%s: %s",
+                            "Не удалось добавить TG уведомление об активности в очередь chat_id=%s, telegram_user_id=%s: %s",
                             chat_id,
                             telegram_user_id,
                             exc,
