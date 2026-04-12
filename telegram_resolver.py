@@ -1,6 +1,7 @@
 """
 MTProto-резолвер Telegram-пользователей через пользовательскую сессию Telethon.
-Используется только для получения устойчивого user_id и базовых данных по username / ссылке.
+Используется для получения устойчивого user_id, базовых данных профиля
+и актуального статуса пользователя через userbot-сессию.
 """
 
 from __future__ import annotations
@@ -8,12 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from telethon import TelegramClient, errors
 from telethon.sessions import StringSession
-from telethon.tl import types
+from telethon.tl import functions, types
 
 from config import (
     TELEGRAM_USERBOT_API_HASH,
@@ -64,6 +65,9 @@ class ResolvedTelegramUser:
     avatar_has_video: bool
     status_text: str | None
     last_seen_at: int | None
+    status_kind: str | None
+    is_online: bool | None
+    activity_at: int | None
     profile_link: str
     lookup_value: str
 
@@ -99,29 +103,33 @@ def normalize_telegram_lookup(raw_value: str) -> NormalizedTelegramLookup:
     return NormalizedTelegramLookup(kind="username", value=normalized)
 
 
-def _build_status_payload(status: object | None) -> tuple[str | None, int | None]:
+def _build_status_payload(
+    status: object | None,
+    checked_at: int,
+) -> tuple[str | None, int | None, str | None, bool | None, int | None]:
     if status is None:
-        return None, None
+        return "статус недоступен", None, "unknown", None, None
 
     if isinstance(status, types.UserStatusOnline):
-        return "онлайн", None
+        return "онлайн", None, "online", True, checked_at
 
     if isinstance(status, types.UserStatusOffline):
         was_online = getattr(status, "was_online", None)
         if isinstance(was_online, datetime):
-            return "был(а) в сети", int(was_online.timestamp())
-        return "был(а) в сети", None
+            timestamp = int(was_online.timestamp())
+            return "был(а) в сети", timestamp, "offline", False, timestamp
+        return "был(а) в сети", None, "offline", False, None
 
     if isinstance(status, types.UserStatusRecently):
-        return "был(а) недавно", None
+        return "был(а) недавно", None, "recently", False, None
 
     if isinstance(status, types.UserStatusLastWeek):
-        return "был(а) на этой неделе", None
+        return "был(а) на этой неделе", None, "last_week", False, None
 
     if isinstance(status, types.UserStatusLastMonth):
-        return "был(а) в этом месяце", None
+        return "был(а) в этом месяце", None, "last_month", False, None
 
-    return "статус скрыт", None
+    return "статус скрыт", None, "hidden", False, None
 
 
 def _build_avatar_payload(photo: object | None) -> tuple[str | None, int | None, bool]:
@@ -134,8 +142,11 @@ def _build_avatar_payload(photo: object | None) -> tuple[str | None, int | None,
     return photo_id, dc_id, has_video
 
 
-def _to_resolved_user(user: types.User, lookup_value: str) -> ResolvedTelegramUser:
-    status_text, last_seen_at = _build_status_payload(getattr(user, "status", None))
+def _to_resolved_user(user: types.User, lookup_value: str, checked_at: int) -> ResolvedTelegramUser:
+    status_text, last_seen_at, status_kind, is_online, activity_at = _build_status_payload(
+        getattr(user, "status", None),
+        checked_at=checked_at,
+    )
     avatar_photo_id, avatar_dc_id, avatar_has_video = _build_avatar_payload(getattr(user, "photo", None))
     username = (getattr(user, "username", None) or "").strip() or None
     profile_link = f"https://t.me/{username}" if username else f"tg://user?id={int(user.id)}"
@@ -152,13 +163,16 @@ def _to_resolved_user(user: types.User, lookup_value: str) -> ResolvedTelegramUs
         avatar_has_video=avatar_has_video,
         status_text=status_text,
         last_seen_at=last_seen_at,
+        status_kind=status_kind,
+        is_online=is_online,
+        activity_at=activity_at,
         profile_link=profile_link,
         lookup_value=lookup_value,
     )
 
 
 class TelegramResolver:
-    """Ленивая обертка над Telethon-клиентом для резолва Telegram-пользователей."""
+    """Ленивая обертка над Telethon-клиентом для резолва и обновления Telegram-пользователей."""
 
     def __init__(self) -> None:
         self._client: TelegramClient | None = None
@@ -203,15 +217,22 @@ class TelegramResolver:
             self._client = client
             return client
 
-    async def close(self) -> None:
-        async with self._lock:
-            if self._client is None:
-                return
-            await self._client.disconnect()
-            self._client = None
+    @staticmethod
+    def _ensure_regular_user(entity: object) -> types.User:
+        if not isinstance(entity, types.User):
+            raise TelegramResolverPeerTypeError
 
-    async def resolve_user(self, raw_value: str) -> ResolvedTelegramUser:
-        lookup = normalize_telegram_lookup(raw_value)
+        if bool(getattr(entity, "bot", False)):
+            raise TelegramResolverPeerTypeError
+
+        return entity
+
+    @staticmethod
+    def _normalize_username(username: str | None) -> str | None:
+        normalized = (username or "").strip().lstrip("@")
+        return normalized or None
+
+    async def _resolve_user_by_lookup(self, lookup: NormalizedTelegramLookup) -> types.User:
         client = await self._get_client()
 
         try:
@@ -228,13 +249,97 @@ class TelegramResolver:
             logger.exception("Неожиданная ошибка Telegram-резолвера: %s", exc)
             raise TelegramResolverUnavailableError from exc
 
-        if not isinstance(entity, types.User):
-            raise TelegramResolverPeerTypeError
+        return self._ensure_regular_user(entity)
 
-        if bool(getattr(entity, "bot", False)):
-            raise TelegramResolverPeerTypeError
+    async def _get_users_by_input(self, telegram_user_id: int, access_hash: int) -> types.User | None:
+        client = await self._get_client()
+        result = await client(
+            functions.users.GetUsersRequest(
+                id=[types.InputUser(user_id=int(telegram_user_id), access_hash=int(access_hash))]
+            )
+        )
+        if not result:
+            return None
 
-        return _to_resolved_user(entity, str(lookup.value))
+        entity = result[0]
+        if isinstance(entity, types.UserEmpty):
+            return None
+
+        return self._ensure_regular_user(entity)
+
+    async def get_user_snapshot(
+        self,
+        telegram_user_id: int,
+        access_hash: int | None = None,
+        username: str | None = None,
+    ) -> ResolvedTelegramUser:
+        checked_at = int(datetime.now(tz=timezone.utc).timestamp())
+        normalized_username = self._normalize_username(username)
+        rpc_error: Exception | None = None
+
+        if access_hash is not None:
+            try:
+                entity = await self._get_users_by_input(telegram_user_id, access_hash)
+                if entity is not None:
+                    return _to_resolved_user(entity, str(normalized_username or telegram_user_id), checked_at)
+            except TelegramResolverPeerTypeError:
+                raise
+            except errors.RPCError as exc:
+                rpc_error = exc
+                logger.warning(
+                    "Не удалось обновить Telegram-пользователя по access_hash user_id=%s: %s",
+                    telegram_user_id,
+                    exc,
+                )
+            except Exception as exc:
+                rpc_error = exc
+                logger.warning(
+                    "Не удалось обновить Telegram-пользователя по access_hash user_id=%s: %s",
+                    telegram_user_id,
+                    exc,
+                )
+
+        if normalized_username:
+            try:
+                entity = await self._resolve_user_by_lookup(
+                    NormalizedTelegramLookup(kind="username", value=normalized_username)
+                )
+                return _to_resolved_user(entity, normalized_username, checked_at)
+            except TelegramResolverNotFoundError:
+                pass
+            except TelegramResolverPeerTypeError:
+                raise
+            except TelegramResolverUnavailableError as exc:
+                rpc_error = exc
+
+        try:
+            entity = await self._resolve_user_by_lookup(
+                NormalizedTelegramLookup(kind="user_id", value=int(telegram_user_id))
+            )
+            return _to_resolved_user(entity, str(telegram_user_id), checked_at)
+        except TelegramResolverNotFoundError:
+            if rpc_error is not None:
+                raise TelegramResolverUnavailableError from rpc_error
+            raise
+        except TelegramResolverPeerTypeError:
+            raise
+        except TelegramResolverUnavailableError as exc:
+            if rpc_error is not None:
+                raise TelegramResolverUnavailableError from rpc_error
+            raise exc
+
+    async def close(self) -> None:
+        async with self._lock:
+            if self._client is None:
+                return
+            await self._client.disconnect()
+            self._client = None
+
+    async def resolve_user(self, raw_value: str) -> ResolvedTelegramUser:
+        lookup = normalize_telegram_lookup(raw_value)
+        entity = await self._resolve_user_by_lookup(lookup)
+        checked_at = int(datetime.now(tz=timezone.utc).timestamp())
+        return _to_resolved_user(entity, str(lookup.value), checked_at)
 
 
 telegram_resolver = TelegramResolver()
@@ -242,6 +347,18 @@ telegram_resolver = TelegramResolver()
 
 async def resolve_telegram_user(raw_value: str) -> ResolvedTelegramUser:
     return await telegram_resolver.resolve_user(raw_value)
+
+
+async def fetch_telegram_user_snapshot(
+    telegram_user_id: int,
+    access_hash: int | None = None,
+    username: str | None = None,
+) -> ResolvedTelegramUser:
+    return await telegram_resolver.get_user_snapshot(
+        telegram_user_id=telegram_user_id,
+        access_hash=access_hash,
+        username=username,
+    )
 
 
 async def close_telegram_resolver() -> None:

@@ -21,6 +21,9 @@ from ui_callbacks import (
     ProfileChangeTypeCallback,
     ProfileChangeUserCallback,
     TgDeleteConfirmCallback,
+    TgNotifyModeCallback,
+    TgNotifyToggleCallback,
+    TgPeriodSelectCallback,
     TgUserActionCallback,
     UserActionCallback,
 )
@@ -69,6 +72,10 @@ CHANGE_NOTIFICATION_OPTIONS: list[tuple[str, str]] = [
     ("posts", "Посты"),
     ("counts", "Счетчики"),
     ("relations", "Друзья / подписчики / подписки"),
+]
+
+TG_NOTIFICATION_TOGGLE_OPTIONS: list[tuple[str, str]] = [
+    ("activity", "Активность / last seen [TG]"),
 ]
 
 
@@ -579,4 +586,94 @@ def tg_delete_confirm_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
         callback_data=TgDeleteConfirmCallback(tg_id=tg_id, confirm=0, src=source).pack(),
     )
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def tg_report_period_keyboard(
+    scope: str,
+    tg_id: int,
+    source: str,
+    back_target: str,
+    *,
+    back_to_card: bool = False,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for label, days in PERIOD_OPTIONS:
+        builder.button(
+            text=label,
+            callback_data=TgPeriodSelectCallback(scope=scope, tg_id=tg_id, days=days, src=source).pack(),
+        )
+    builder.adjust(2)
+
+    if back_to_card:
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+        )
+    else:
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=NavCallback(target=back_target).pack(),
+        )
+
+    builder.row(
+        *[
+            back_button,
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_report_result_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🗓️ Другой период [TG]",
+        callback_data=TgUserActionCallback(action="online_report", tg_id=tg_id, src=source).pack(),
+    )
+    builder.button(
+        text="👤 Карточка пользователя [TG]",
+        callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+    )
+    builder.adjust(1)
+    builder.row(
+        *[
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+            ),
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_notification_settings_keyboard(
+    current_mode: str,
+    activity_enabled: bool,
+    back_target: str = "notification_hub",
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for label, mode in NOTIFICATION_OPTIONS:
+        prefix = "• " if mode == current_mode else ""
+        builder.button(
+            text=f"{prefix}{label} [TG]",
+            callback_data=TgNotifyModeCallback(mode=mode).pack(),
+        )
+    builder.adjust(1)
+
+    for key, label in TG_NOTIFICATION_TOGGLE_OPTIONS:
+        icon = "✅" if activity_enabled else "🚫"
+        status = "ВКЛ" if activity_enabled else "ВЫКЛ"
+        builder.button(
+            text=f"{icon} {label}: {status}",
+            callback_data=TgNotifyToggleCallback(key=key).pack(),
+        )
+    builder.adjust(1)
+    builder.row(
+        *[
+            InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target=back_target).pack()),
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
     return builder.as_markup()

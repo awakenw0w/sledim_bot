@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from config import TELEGRAM_BOT_TOKEN
 import db
 from handlers import router
+from telegram_monitor import run_telegram_monitor
 from telegram_resolver import close_telegram_resolver
 from tracker import run_tracker
 
@@ -44,6 +45,7 @@ async def main() -> None:
 
     # Запускаем трекер как фоновую asyncio-задачу
     tracker_task = asyncio.create_task(run_tracker(bot))
+    telegram_monitor_task = asyncio.create_task(run_telegram_monitor(bot))
     logger.info("Бот запущен. Ожидаю сообщения...")
 
     try:
@@ -52,8 +54,13 @@ async def main() -> None:
     finally:
         # При остановке (Ctrl+C или другой сигнал) отменяем задачу трекера
         tracker_task.cancel()
+        telegram_monitor_task.cancel()
         try:
             await tracker_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await telegram_monitor_task
         except asyncio.CancelledError:
             pass
         await close_telegram_resolver()

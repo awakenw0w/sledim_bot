@@ -43,6 +43,9 @@ from ui_callbacks import (
     ProfileChangeTypeCallback,
     ProfileChangeUserCallback,
     TgDeleteConfirmCallback,
+    TgNotifyModeCallback,
+    TgNotifyToggleCallback,
+    TgPeriodSelectCallback,
     TgUserActionCallback,
     UserActionCallback,
 )
@@ -82,6 +85,9 @@ from ui_keyboards import (
     report_result_keyboard,
     tg_add_user_reply_keyboard,
     tg_delete_confirm_keyboard,
+    tg_notification_settings_keyboard,
+    tg_report_period_keyboard,
+    tg_report_result_keyboard,
     tracked_list_chunk_keyboard,
     tg_tracked_list_chunk_keyboard,
     tg_user_card_keyboard,
@@ -179,6 +185,7 @@ PROFILE_CHANGE_FILTERS: dict[str, dict[str, Any]] = {
     "all": {"label": "Все изменения", "fields": None, "supported": True},
 }
 PROFILE_CHANGE_LABELS = {"wall_post": "Пост"}
+TG_NOTIFICATION_TOGGLE_LABELS = {"activity": "Активность / last seen [TG]"}
 
 
 def _build_subscription_keyboard() -> InlineKeyboardMarkup:
@@ -490,6 +497,61 @@ def _session_duration_for_period(session: dict, since_ts: int | None, now_ts: in
     return effective_end - effective_start
 
 
+def _build_tg_status_label(detail: dict) -> str:
+    if detail.get("is_online") is True:
+        return "🟢 онлайн"
+
+    status_text = str(detail.get("status_text") or "").strip()
+    if not status_text:
+        return "статус еще не зафиксирован"
+
+    if detail.get("last_seen_at") is not None:
+        return f"🔴 {status_text}"
+
+    if detail.get("status_kind") in {"recently", "last_week", "last_month", "hidden"}:
+        return f"🟡 {status_text}"
+
+    return status_text
+
+
+def _build_tg_activity_line(detail: dict) -> str:
+    if detail.get("last_seen_at") is not None:
+        return f"Last seen: {vk_api.format_timestamp(int(detail['last_seen_at']))}"
+
+    if detail.get("activity_at") is not None:
+        return f"Последняя активность: {vk_api.format_timestamp(int(detail['activity_at']))}"
+
+    return "Последняя активность: пока не зафиксирована"
+
+
+def _format_tg_session_block(index: int, session: dict, since_ts: int | None, now_ts: int) -> str:
+    started_at = int(session["started_at"])
+    ended_at = int(session["ended_at"]) if session["ended_at"] is not None else None
+    effective_started_at = max(started_at, since_ts) if since_ts is not None else started_at
+    effective_ended_at = min(ended_at if ended_at is not None else now_ts, now_ts)
+
+    start_dt = datetime.fromtimestamp(started_at, tz=MSK)
+    start_date = start_dt.strftime("%d.%m.%Y")
+    start_time = start_dt.strftime("%H:%M:%S")
+    if since_ts is not None and started_at < since_ts:
+        start_time = f"{start_time} (до начала периода)"
+
+    if ended_at is None:
+        end_time = "до сих пор онлайн"
+    else:
+        end_dt = datetime.fromtimestamp(ended_at, tz=MSK)
+        end_time = end_dt.strftime("%H:%M:%S")
+
+    duration_text = _format_duration(max(effective_ended_at - effective_started_at, 0))
+    return (
+        f"{index}.\n"
+        f"Дата: {start_date}\n"
+        f"Зашел: {start_time}\n"
+        f"Вышел: {end_time}\n"
+        f"Был онлайн: {duration_text}"
+    )
+
+
 def _snapshot_from_detail(detail: dict, live_user: dict | None = None) -> dict:
     vk_id = int(detail["vk_id"])
     live_profile = vk_api.extract_profile_snapshot(live_user) if live_user else {}
@@ -622,12 +684,13 @@ def _build_help_text(current_mode: str, change_settings: dict[str, bool]) -> str
         f"• <b>{BTN_HELP}</b> — открыть эту справку\n\n"
         "<b>Как открыть отчеты:</b>\n"
         f"• для персонального отчета по VK зайдите в <b>{BTN_PLATFORM_VK}</b> → <b>{BTN_TRACKED_LIST}</b>\n"
+        f"• для персонального отчета по TG зайдите в <b>{BTN_PLATFORM_TG}</b> → <b>{BTN_TRACKED_LIST_TG}</b>\n"
         "• откройте карточку нужного пользователя и выберите тип отчета\n"
         f"• для общего отчета используйте <b>{BTN_GENERAL_REPORT}</b> и затем нужную платформу\n"
         "• персональные отчеты VK и TG не смешиваются между собой\n\n"
         "<b>Как работают уведомления:</b>\n"
         f"• в разделе <b>{BTN_NOTIFY_VK}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна и изменениях профиля VK\n"
-        f"• раздел <b>{BTN_NOTIFY_TG}</b> уже подготовлен интерфейсно, но глубокая логика Telegram пока не подключена\n"
+        f"• в разделе <b>{BTN_NOTIFY_TG}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна и activity / last seen Telegram\n"
         "• если уведомления не приходят, проверьте, что отслеживание включено и что нужный режим уведомлений не отключен\n\n"
         "<b>Почему время онлайна может иметь погрешность:</b>\n"
         "• бот опрашивает платформу с интервалом, поэтому короткие входы и выходы могут округляться или фиксироваться с небольшой задержкой\n"
@@ -636,7 +699,7 @@ def _build_help_text(current_mode: str, change_settings: dict[str, bool]) -> str
         "• проверьте настройки уведомлений в боте\n"
         "• убедитесь, что пользователь действительно добавлен в отслеживание в нужной платформе\n"
         "• если проблема в VK сохраняется, попробуйте заново открыть карточку пользователя или повторно добавить его\n"
-        "• если проблема в TG, учитывайте, что Telegram-ветка пока подготовлена как интерфейсный каркас\n\n"
+        "• если проблема в TG, проверьте, что userbot-сессия активна и Telegram-резолвер доступен\n\n"
         "<b>⌨️ Резервные команды:</b>\n"
         "/start — 🏠 открыть главное меню\n"
         "/help — ❓ подробная справка\n"
@@ -649,9 +712,9 @@ def _build_help_text(current_mode: str, change_settings: dict[str, bool]) -> str
         "/notify <code>MODE</code> — 🔔 быстро сменить только режим онлайн-уведомлений\n"
         "/stop — ⏸️ остановить отслеживание\n"
         "/resume — ▶️ возобновить отслеживание\n\n"
-        f"🔔 Текущий режим онлайн-уведомлений: <b>{NOTIFICATION_MODE_LABELS.get(current_mode, current_mode)}</b>\n"
-        f"✅ Включены уведомления по изменениям: <b>{_escape_html(enabled_changes_text)}</b>\n"
-        f"🚫 Отключены уведомления по изменениям: <b>{_escape_html(disabled_changes_text)}</b>"
+        f"🔔 Текущий режим VK онлайн-уведомлений: <b>{NOTIFICATION_MODE_LABELS.get(current_mode, current_mode)}</b>\n"
+        f"✅ Включены VK-уведомления по изменениям: <b>{_escape_html(enabled_changes_text)}</b>\n"
+        f"🚫 Отключены VK-уведомления по изменениям: <b>{_escape_html(disabled_changes_text)}</b>"
     )
 
 
@@ -683,7 +746,7 @@ async def _show_vk_menu(message: Message) -> None:
 async def _show_tg_menu(message: Message) -> None:
     await message.answer(
         "🟨 <b>Раздел Telegram [TG]</b>\n"
-        "Структура этого меню зеркальна VK-разделу. Telegram-логика пока подготовлена как интерфейсный каркас без ложных данных.",
+        "Структура этого меню зеркальна VK-разделу. Здесь уже подключены базовые статусы, online-сессии, отчеты и уведомления без смешивания с VK.",
         reply_markup=platform_section_keyboard("tg"),
     )
 
@@ -798,6 +861,9 @@ async def _resolve_tg_user_from_input(message: Message, raw_value: str) -> tuple
                 "avatar_has_video": bool(known_user.get("avatar_has_video")),
                 "status_text": None,
                 "last_seen_at": None,
+                "is_online": None,
+                "status_kind": None,
+                "activity_at": None,
                 "lookup_value": str(normalized.value),
             }, None
 
@@ -829,6 +895,9 @@ async def _resolve_tg_user_from_input(message: Message, raw_value: str) -> tuple
         "avatar_has_video": resolved.avatar_has_video,
         "status_text": resolved.status_text,
         "last_seen_at": resolved.last_seen_at,
+        "is_online": resolved.is_online,
+        "status_kind": resolved.status_kind,
+        "activity_at": resolved.activity_at,
         "lookup_value": resolved.lookup_value,
     }, None
 
@@ -858,6 +927,9 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
             telegram_user_id=int(tg_user["telegram_user_id"]),
             status_text=tg_user.get("status_text"),
             last_seen_at=tg_user.get("last_seen_at"),
+            is_online=tg_user.get("is_online"),
+            status_kind=tg_user.get("status_kind"),
+            activity_at=tg_user.get("activity_at"),
         )
 
     added = await db.add_tg_tracked_user(
@@ -1101,7 +1173,7 @@ async def _show_tg_user_card(message: Message, telegram_user_id: int, source: st
 
     display_name = _tg_display_name(detail)
     username = str(detail.get("username") or "").strip()
-    status_text = str(detail.get("status_text") or "").strip() or "Статус еще не зафиксирован."
+    status_label = _build_tg_status_label(detail)
     lines = [
         f"👤 <b>{_escape_html(display_name)}</b>",
         f"ID: <code>{detail['telegram_user_id']}</code>",
@@ -1109,14 +1181,15 @@ async def _show_tg_user_card(message: Message, telegram_user_id: int, source: st
         f"Фамилия: {_escape_html(str(detail.get('last_name') or 'не указано'))}",
         f"Username: <code>{_escape_html('@' + username if username else 'не указан')}</code>",
         f"Добавлен: {_format_added_at(detail.get('added_at'))}",
-        f"Текущий статус: {_escape_html(status_text)}",
+        f"Текущий статус: {_escape_html(status_label)}",
+        _build_tg_activity_line(detail),
     ]
     if detail.get("profile_link"):
         lines.append(f"Ссылка: <a href='{_escape_html(str(detail['profile_link']))}'>{_escape_html(str(detail['profile_link']))}</a>")
     if detail.get("avatar_photo_id"):
         lines.append(f"Аватар: photo_id <code>{_escape_html(str(detail['avatar_photo_id']))}</code>")
-    if detail.get("last_seen_at"):
-        lines.append(f"Последнее обновление статуса: {vk_api.format_timestamp(int(detail['last_seen_at']))}")
+    if detail.get("status_updated_at"):
+        lines.append(f"Последнее обновление статуса: {_format_added_at(detail.get('status_updated_at'))}")
 
     await message.answer(
         "\n".join(lines),
@@ -1137,6 +1210,140 @@ async def _show_tg_delete_confirmation(message: Message, telegram_user_id: int, 
         f"🗑️ Удалить Telegram-пользователя <b>{_escape_html(_tg_display_name(detail))}</b> из отслеживания?",
         reply_markup=tg_delete_confirm_keyboard(telegram_user_id, source),
     )
+
+
+async def _show_tg_notification_settings(
+    message: Message,
+    text: str | None = None,
+    back_target: str = "notification_hub",
+) -> None:
+    current_mode = await db.get_tg_notification_mode(message.chat.id)
+    activity_enabled = await db.get_tg_activity_notification_enabled(message.chat.id)
+    await message.answer(
+        text
+        or (
+            "🔔 Здесь можно отдельно настроить уведомления Telegram [TG]:\n"
+            "• 🟢🔴 уведомления о входе и выходе из онлайна\n"
+            "• 🟡 уведомления по activity / last seen\n\n"
+            "👇 Нажмите на нужную кнопку, чтобы изменить настройку."
+        ),
+        reply_markup=tg_notification_settings_keyboard(current_mode, activity_enabled, back_target=back_target),
+    )
+
+
+async def _show_tg_report_period_picker(message: Message, telegram_user_id: int, source: str) -> None:
+    detail = await db.get_tg_tracked_user_detail(message.chat.id, telegram_user_id)
+    if detail is None:
+        await message.answer(
+            "⚠️ Telegram-пользователь не найден в списке отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(
+        f"🗓️ Выберите период для отчета по онлайну [TG] для <b>{_escape_html(_tg_display_name(detail))}</b>.",
+        reply_markup=tg_report_period_keyboard(
+            scope="one",
+            tg_id=telegram_user_id,
+            source=source,
+            back_target="tg_list",
+            back_to_card=True,
+        ),
+    )
+
+
+async def _show_tg_general_report_period_picker(message: Message) -> None:
+    await message.answer(
+        "📊 <b>Общий отчет [TG]</b>\nВыберите период. Данные VK и TG в этом отчете не смешиваются.",
+        reply_markup=tg_report_period_keyboard(
+            scope="all",
+            tg_id=0,
+            source="tg_general",
+            back_target="general_reports_hub",
+            back_to_card=False,
+        ),
+    )
+
+
+async def _build_tg_period_user_report(chat_id: int, detail: dict, days: int) -> str:
+    now_ts = int(datetime.now(tz=MSK).timestamp())
+    since_ts = _period_to_since_ts(days)
+    sessions = await db.get_tg_online_sessions_for_period(
+        chat_id,
+        int(detail["telegram_user_id"]),
+        since_ts=since_ts,
+    )
+
+    total_duration = sum(_session_duration_for_period(session, since_ts, now_ts) for session in sessions)
+    display_name = _tg_display_name(detail)
+    username = str(detail.get("username") or "").strip()
+    profile_link = str(detail.get("profile_link") or f"tg://user?id={int(detail['telegram_user_id'])}")
+    lines = [
+        "<b>📈 Отчет по онлайну [TG]</b>",
+        f"👤 <b>{_escape_html(display_name)}</b>",
+        f"ID: <code>{detail['telegram_user_id']}</code>",
+        f"Username: <code>{_escape_html('@' + username if username else 'не указан')}</code>",
+        f"Статус: {_escape_html(_build_tg_status_label(detail))}",
+        _build_tg_activity_line(detail),
+        f"🔗 <a href='{_escape_html(profile_link)}'>{_escape_html(profile_link)}</a>",
+        f"📊 Период: <b>{_escape_html(_format_period_label(days))}</b>",
+        f"Количество входов: <b>{len(sessions)}</b>",
+        f"Суммарное время онлайна: <b>{_format_duration(total_duration)}</b>",
+        "",
+        "<b>Сессии за период:</b>",
+    ]
+
+    if sessions:
+        for index, session in enumerate(sessions, start=1):
+            lines.append(_format_tg_session_block(index, session, since_ts, now_ts))
+            lines.append("")
+    else:
+        lines.append("🔍 За выбранный период сессий не найдено.")
+
+    if detail.get("status_kind") in {"recently", "last_week", "last_month", "hidden", "unknown"}:
+        lines.append("")
+        lines.append(
+            "ℹ️ Telegram может отдавать ограниченный last seen. В таких случаях бот показывает activity / last seen как отдельный сигнал."
+        )
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+async def _build_tg_general_report_blocks(chat_id: int, days: int) -> list[str]:
+    details = await db.get_tg_tracked_users_details(chat_id)
+    now_ts = int(datetime.now(tz=MSK).timestamp())
+    since_ts = _period_to_since_ts(days)
+
+    if not details:
+        return ["📋 Список отслеживаемых пользователей [TG] пуст."]
+
+    blocks = [f"<b>📊 Общий отчет [TG] за период:</b> {_escape_html(_format_period_label(days))}"]
+    for detail in details:
+        sessions = await db.get_tg_online_sessions_for_period(
+            chat_id,
+            int(detail["telegram_user_id"]),
+            since_ts=since_ts,
+        )
+        total_duration = sum(_session_duration_for_period(session, since_ts, now_ts) for session in sessions)
+        display_name = _tg_display_name(detail)
+        username = str(detail.get("username") or "").strip()
+        profile_link = str(detail.get("profile_link") or f"tg://user?id={int(detail['telegram_user_id'])}")
+        lines = [
+            f"<b>{_escape_html(display_name)}</b>",
+            f"ID: <code>{detail['telegram_user_id']}</code>",
+            f"Статус: {_escape_html(_build_tg_status_label(detail))}",
+            _build_tg_activity_line(detail),
+            f"Заходов: <b>{len(sessions)}</b>",
+            f"Суммарно онлайн: <b>{_format_duration(total_duration)}</b>",
+            f"🔗 <a href='{_escape_html(profile_link)}'>{_escape_html(profile_link)}</a>",
+        ]
+        if username:
+            lines.insert(2, f"Username: <code>@{_escape_html(username)}</code>")
+        blocks.append("\n".join(lines))
+
+    return blocks
 
 
 async def _show_tracked_users_screen(message: Message) -> None:
@@ -1578,7 +1785,7 @@ async def _show_screen_by_nav_target(message: Message, target: str, state: FSMCo
         return
     if target == "notify_tg":
         await state.clear()
-        await _show_tg_placeholder(message, "🔔 <b>Настройки уведомлений [TG]</b>", back_target="notification_hub")
+        await _show_tg_notification_settings(message, back_target="notification_hub")
         return
     if target == "vk_add":
         await _show_add_prompt(message, state)
@@ -1596,7 +1803,7 @@ async def _show_screen_by_nav_target(message: Message, target: str, state: FSMCo
         return
     if target == "tg_general_report":
         await state.clear()
-        await _show_tg_placeholder(message, "📊 <b>Общий отчет [TG]</b>", back_target="general_reports_hub")
+        await _show_tg_general_report_period_picker(message)
         return
     if target == "list":
         await state.clear()
@@ -1662,7 +1869,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             "👋 Привет. Это бот с раздельным интерфейсом для двух платформ.\n\n"
             "Сначала выберите нужный раздел:\n"
             f"• <b>{BTN_PLATFORM_VK}</b> — все действия только по ВКонтакте\n"
-            f"• <b>{BTN_PLATFORM_TG}</b> — интерфейс Telegram-ветки без ложных данных\n"
+            f"• <b>{BTN_PLATFORM_TG}</b> — все действия только по Telegram с отдельными статусами и отчетами\n"
             f"• <b>{BTN_GENERAL_REPORT}</b> — общие отчеты верхнего уровня по платформам\n"
             f"• <b>{BTN_NOTIFY}</b> — настройки уведомлений по платформам\n"
             f"• <b>{BTN_HELP}</b> — справка по новому интерфейсу\n\n"
@@ -1732,7 +1939,7 @@ async def menu_general_report_vk(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_GENERAL_REPORT_TG)
 async def menu_general_report_tg(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await _show_tg_placeholder(message, "📊 <b>Общий отчет [TG]</b>", back_target="general_reports_hub")
+    await _show_tg_general_report_period_picker(message)
 
 
 @router.message(F.text == BTN_SEARCH)
@@ -1755,7 +1962,7 @@ async def menu_notify_vk(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_NOTIFY_TG)
 async def menu_notify_tg(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await _show_tg_placeholder(message, "🔔 <b>Настройки уведомлений [TG]</b>", back_target="notification_hub")
+    await _show_tg_notification_settings(message, back_target="notification_hub")
 
 
 @router.message(F.text == BTN_PROFILE_CHANGES)
@@ -1801,6 +2008,44 @@ async def cb_notify_toggle(callback: CallbackQuery, callback_data: NotifyToggleC
     label = CHANGE_NOTIFICATION_LABELS.get(callback_data.key, callback_data.key)
     status_text = "включены" if enabled else "отключены"
     await _show_notification_settings(
+        callback.message,
+        text=f"🔔 Уведомления по категории <b>{_escape_html(label)}</b> {status_text}.",
+        back_target="notification_hub",
+    )
+
+
+@router.callback_query(TgNotifyModeCallback.filter())
+async def cb_tg_notify_mode(callback: CallbackQuery, callback_data: TgNotifyModeCallback) -> None:
+    await callback.answer("Настройка обновлена.")
+    if callback.message is None:
+        return
+
+    mode = await db.set_tg_notification_mode(callback.message.chat.id, callback_data.mode)
+    await _show_tg_notification_settings(
+        callback.message,
+        text=f"🔔 Режим TG-уведомлений обновлен: <b>{NOTIFICATION_MODE_LABELS[mode]}</b>",
+        back_target="notification_hub",
+    )
+
+
+@router.callback_query(TgNotifyToggleCallback.filter())
+async def cb_tg_notify_toggle(callback: CallbackQuery, callback_data: TgNotifyToggleCallback) -> None:
+    await callback.answer("Настройка обновлена.")
+    if callback.message is None:
+        return
+
+    if callback_data.key != "activity":
+        await _show_tg_notification_settings(
+            callback.message,
+            text="⚠️ Неизвестная TG-настройка уведомлений.",
+            back_target="notification_hub",
+        )
+        return
+
+    enabled = await db.toggle_tg_activity_notification(callback.message.chat.id)
+    label = TG_NOTIFICATION_TOGGLE_LABELS["activity"]
+    status_text = "включены" if enabled else "отключены"
+    await _show_tg_notification_settings(
         callback.message,
         text=f"🔔 Уведомления по категории <b>{_escape_html(label)}</b> {status_text}.",
         back_target="notification_hub",
@@ -1918,11 +2163,7 @@ async def cb_tg_user_action(callback: CallbackQuery, callback_data: TgUserAction
         return
 
     if callback_data.action == "online_report":
-        await _show_tg_placeholder(
-            callback.message,
-            "📈 <b>Отчет по онлайну [TG]</b>\nРаздел Telegram подготовлен. Логика этого блока будет добавлена следующим этапом.",
-            back_target="tg_list",
-        )
+        await _show_tg_report_period_picker(callback.message, callback_data.tg_id, callback_data.src)
         return
 
     if callback_data.action == "profile_changes":
@@ -2000,6 +2241,37 @@ async def cb_tg_delete_confirm(callback: CallbackQuery, callback_data: TgDeleteC
         )
 
     await _show_tg_tracked_users_screen(callback.message)
+
+
+@router.callback_query(TgPeriodSelectCallback.filter())
+async def cb_tg_period_select(callback: CallbackQuery, callback_data: TgPeriodSelectCallback) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    if callback_data.scope == "all":
+        blocks = await _build_tg_general_report_blocks(callback.message.chat.id, callback_data.days)
+        await _send_long_html(callback.message, blocks)
+        await callback.message.answer(
+            "📊 Что дальше?",
+            reply_markup=general_report_result_keyboard_with_target("tg_general_report"),
+        )
+        return
+
+    detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
+    if detail is None:
+        await callback.message.answer(
+            "⚠️ Telegram-пользователь не найден в отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    report_text = await _build_tg_period_user_report(callback.message.chat.id, detail, callback_data.days)
+    await _send_long_html(callback.message, [report_text])
+    await callback.message.answer(
+        "📈 Что дальше?",
+        reply_markup=tg_report_result_keyboard(callback_data.tg_id, callback_data.src),
+    )
 
 
 @router.callback_query(PeriodSelectCallback.filter())

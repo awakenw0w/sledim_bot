@@ -64,3 +64,18 @@ class TgDeleteConfirmCallback(CallbackData, prefix="tgd"):
     tg_id: int
     confirm: int
     src: str
+
+
+class TgPeriodSelectCallback(CallbackData, prefix="tgp"):
+    scope: str
+    tg_id: int
+    days: int
+    src: str
+
+
+class TgNotifyModeCallback(CallbackData, prefix="tgn"):
+    mode: str
+
+
+class TgNotifyToggleCallback(CallbackData, prefix="tgt"):
+    key: str
