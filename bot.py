@@ -23,6 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
 async def main() -> None:
     """Инициализация и запуск бота вместе с трекером."""
 
