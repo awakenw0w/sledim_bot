@@ -212,6 +212,7 @@ async def init_db() -> None:
                 username            TEXT,
                 first_name          TEXT,
                 last_name           TEXT,
+                source_value        TEXT,
                 is_active           INTEGER NOT NULL DEFAULT 1,
                 added_at            TEXT    NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(chat_id, telegram_user_id)
@@ -223,6 +224,22 @@ async def init_db() -> None:
                 telegram_user_id    INTEGER PRIMARY KEY,
                 status_text         TEXT,
                 last_seen_at        INTEGER,
+                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tg_known_users (
+                telegram_user_id    INTEGER PRIMARY KEY,
+                username            TEXT,
+                first_name          TEXT,
+                last_name           TEXT,
+                access_hash         INTEGER,
+                profile_link        TEXT,
+                avatar_photo_id     TEXT,
+                avatar_dc_id        INTEGER,
+                avatar_has_video    INTEGER NOT NULL DEFAULT 0,
+                is_bot              INTEGER NOT NULL DEFAULT 0,
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
@@ -262,6 +279,12 @@ async def init_db() -> None:
         await _ensure_column(db, "profile_cache", "games", "TEXT")
         await _ensure_column(db, "profile_cache", "quotes", "TEXT")
         await _ensure_column(db, "profile_cache", "updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))")
+        await _ensure_column(db, "tg_tracked_users", "source_value", "TEXT")
+        await _ensure_column(db, "tg_known_users", "access_hash", "INTEGER")
+        await _ensure_column(db, "tg_known_users", "profile_link", "TEXT")
+        await _ensure_column(db, "tg_known_users", "avatar_photo_id", "TEXT")
+        await _ensure_column(db, "tg_known_users", "avatar_dc_id", "INTEGER")
+        await _ensure_column(db, "tg_known_users", "avatar_has_video", "INTEGER NOT NULL DEFAULT 0")
 
         await db.commit()
 
@@ -313,11 +336,13 @@ async def add_tg_tracked_user(
     username: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
+    source_value: str | None = None,
 ) -> bool:
     """Добавляет Telegram-пользователя в список отслеживаемых для конкретного чата."""
     normalized_username = (username or "").strip().lstrip("@") or None
     normalized_first_name = (first_name or "").strip() or None
     normalized_last_name = (last_name or "").strip() or None
+    normalized_source_value = (source_value or "").strip() or None
 
     async with aiosqlite.connect(DB_PATH) as db:
         await _ensure_chat_settings_row(db, chat_id)
@@ -337,10 +362,18 @@ async def add_tg_tracked_user(
                     username,
                     first_name,
                     last_name,
+                    source_value,
                     is_active
-                ) VALUES (?, ?, ?, ?, ?, 1)
+                ) VALUES (?, ?, ?, ?, ?, ?, 1)
                 """,
-                (chat_id, telegram_user_id, normalized_username, normalized_first_name, normalized_last_name),
+                (
+                    chat_id,
+                    telegram_user_id,
+                    normalized_username,
+                    normalized_first_name,
+                    normalized_last_name,
+                    normalized_source_value,
+                ),
             )
             await db.commit()
             return True
@@ -352,13 +385,174 @@ async def add_tg_tracked_user(
                 username = COALESCE(?, username),
                 first_name = COALESCE(?, first_name),
                 last_name = COALESCE(?, last_name),
+                source_value = COALESCE(?, source_value),
                 is_active = 1
             WHERE chat_id = ? AND telegram_user_id = ?
             """,
-            (normalized_username, normalized_first_name, normalized_last_name, chat_id, telegram_user_id),
+            (
+                normalized_username,
+                normalized_first_name,
+                normalized_last_name,
+                normalized_source_value,
+                chat_id,
+                telegram_user_id,
+            ),
         )
         await db.commit()
         return int(row[1]) == 0
+
+
+async def upsert_tg_known_user(
+    telegram_user_id: int,
+    username: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    access_hash: int | None = None,
+    profile_link: str | None = None,
+    avatar_photo_id: str | None = None,
+    avatar_dc_id: int | None = None,
+    avatar_has_video: bool = False,
+    is_bot: bool = False,
+) -> None:
+    """Сохраняет или обновляет известного Telegram-пользователя, которого бот уже видел."""
+    normalized_username = (username or "").strip().lstrip("@") or None
+    normalized_first_name = (first_name or "").strip() or None
+    normalized_last_name = (last_name or "").strip() or None
+    normalized_profile_link = (profile_link or "").strip() or None
+    normalized_avatar_photo_id = (avatar_photo_id or "").strip() or None
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO tg_known_users (
+                telegram_user_id,
+                username,
+                first_name,
+                last_name,
+                access_hash,
+                profile_link,
+                avatar_photo_id,
+                avatar_dc_id,
+                avatar_has_video,
+                is_bot,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                username = COALESCE(excluded.username, tg_known_users.username),
+                first_name = COALESCE(excluded.first_name, tg_known_users.first_name),
+                last_name = COALESCE(excluded.last_name, tg_known_users.last_name),
+                access_hash = COALESCE(excluded.access_hash, tg_known_users.access_hash),
+                profile_link = COALESCE(excluded.profile_link, tg_known_users.profile_link),
+                avatar_photo_id = COALESCE(excluded.avatar_photo_id, tg_known_users.avatar_photo_id),
+                avatar_dc_id = COALESCE(excluded.avatar_dc_id, tg_known_users.avatar_dc_id),
+                avatar_has_video = excluded.avatar_has_video,
+                is_bot = excluded.is_bot,
+                updated_at = datetime('now')
+            """,
+            (
+                telegram_user_id,
+                normalized_username,
+                normalized_first_name,
+                normalized_last_name,
+                access_hash,
+                normalized_profile_link,
+                normalized_avatar_photo_id,
+                avatar_dc_id,
+                1 if avatar_has_video else 0,
+                1 if is_bot else 0,
+            ),
+        )
+        await db.commit()
+
+
+async def get_tg_known_user_by_username(username: str) -> dict | None:
+    """Ищет известного Telegram-пользователя по username среди тех, кого бот уже видел."""
+    normalized_username = (username or "").strip().lstrip("@")
+    if not normalized_username:
+        return None
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT
+                telegram_user_id,
+                username,
+                first_name,
+                last_name,
+                access_hash,
+                profile_link,
+                avatar_photo_id,
+                avatar_dc_id,
+                avatar_has_video,
+                is_bot,
+                updated_at
+            FROM tg_known_users
+            WHERE lower(username) = lower(?)
+            LIMIT 1
+            """,
+            (normalized_username,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "telegram_user_id": row[0],
+        "username": row[1],
+        "first_name": row[2],
+        "last_name": row[3],
+        "access_hash": row[4],
+        "profile_link": row[5],
+        "avatar_photo_id": row[6],
+        "avatar_dc_id": row[7],
+        "avatar_has_video": bool(row[8]),
+        "is_bot": bool(row[9]),
+        "updated_at": row[10],
+    }
+
+
+async def get_tg_known_user_by_id(telegram_user_id: int) -> dict | None:
+    """Возвращает известного Telegram-пользователя по id, если бот уже видел его раньше."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT
+                telegram_user_id,
+                username,
+                first_name,
+                last_name,
+                access_hash,
+                profile_link,
+                avatar_photo_id,
+                avatar_dc_id,
+                avatar_has_video,
+                is_bot,
+                updated_at
+            FROM tg_known_users
+            WHERE telegram_user_id = ?
+            LIMIT 1
+            """,
+            (telegram_user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "telegram_user_id": row[0],
+        "username": row[1],
+        "first_name": row[2],
+        "last_name": row[3],
+        "access_hash": row[4],
+        "profile_link": row[5],
+        "avatar_photo_id": row[6],
+        "avatar_dc_id": row[7],
+        "avatar_has_video": bool(row[8]),
+        "is_bot": bool(row[9]),
+        "updated_at": row[10],
+    }
 
 
 async def remove_tracked_user(chat_id: int, vk_id: int) -> bool:
@@ -611,15 +805,22 @@ async def get_tg_tracked_user_detail(chat_id: int, telegram_user_id: int) -> dic
                 t.id,
                 t.chat_id,
                 t.telegram_user_id,
-                t.username,
-                t.first_name,
-                t.last_name,
+                COALESCE(t.username, k.username),
+                COALESCE(t.first_name, k.first_name),
+                COALESCE(t.last_name, k.last_name),
                 t.is_active,
                 t.added_at,
+                t.source_value,
+                k.access_hash,
+                k.profile_link,
+                k.avatar_photo_id,
+                k.avatar_dc_id,
+                k.avatar_has_video,
                 s.status_text,
                 s.last_seen_at,
                 s.updated_at
             FROM tg_tracked_users AS t
+            LEFT JOIN tg_known_users AS k ON k.telegram_user_id = t.telegram_user_id
             LEFT JOIN tg_last_status AS s ON s.telegram_user_id = t.telegram_user_id
             WHERE t.chat_id = ? AND t.telegram_user_id = ?
             LIMIT 1
@@ -640,9 +841,15 @@ async def get_tg_tracked_user_detail(chat_id: int, telegram_user_id: int) -> dic
         "last_name": row[5],
         "is_active": row[6],
         "added_at": row[7],
-        "status_text": row[8],
-        "last_seen_at": row[9],
-        "status_updated_at": row[10],
+        "source_value": row[8],
+        "access_hash": row[9],
+        "profile_link": row[10],
+        "avatar_photo_id": row[11],
+        "avatar_dc_id": row[12],
+        "avatar_has_video": bool(row[13]),
+        "status_text": row[14],
+        "last_seen_at": row[15],
+        "status_updated_at": row[16],
     }
 
 
@@ -653,15 +860,22 @@ async def get_tg_tracked_users_details(chat_id: int, active_only: bool = True) -
             t.id,
             t.chat_id,
             t.telegram_user_id,
-            t.username,
-            t.first_name,
-            t.last_name,
+            COALESCE(t.username, k.username),
+            COALESCE(t.first_name, k.first_name),
+            COALESCE(t.last_name, k.last_name),
             t.is_active,
             t.added_at,
+            t.source_value,
+            k.access_hash,
+            k.profile_link,
+            k.avatar_photo_id,
+            k.avatar_dc_id,
+            k.avatar_has_video,
             s.status_text,
             s.last_seen_at,
             s.updated_at
         FROM tg_tracked_users AS t
+        LEFT JOIN tg_known_users AS k ON k.telegram_user_id = t.telegram_user_id
         LEFT JOIN tg_last_status AS s ON s.telegram_user_id = t.telegram_user_id
         WHERE t.chat_id = ?
     """
@@ -691,9 +905,15 @@ async def get_tg_tracked_users_details(chat_id: int, active_only: bool = True) -
             "last_name": row[5],
             "is_active": row[6],
             "added_at": row[7],
-            "status_text": row[8],
-            "last_seen_at": row[9],
-            "status_updated_at": row[10],
+            "source_value": row[8],
+            "access_hash": row[9],
+            "profile_link": row[10],
+            "avatar_photo_id": row[11],
+            "avatar_dc_id": row[12],
+            "avatar_has_video": bool(row[13]),
+            "status_text": row[14],
+            "last_seen_at": row[15],
+            "status_updated_at": row[16],
         }
         for row in rows
     ]

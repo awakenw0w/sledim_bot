@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from config import TELEGRAM_BOT_TOKEN
 import db
 from handlers import router
+from telegram_resolver import close_telegram_resolver
 from tracker import run_tracker
 
 # Настройка логирования: уровень INFO, формат с временем и именем модуля
@@ -55,6 +56,7 @@ async def main() -> None:
             await tracker_task
         except asyncio.CancelledError:
             pass
+        await close_telegram_resolver()
         await bot.session.close()
         logger.info("Бот остановлен.")
 

@@ -25,6 +25,14 @@ from aiogram.types import (
 import db
 import vk_api
 from config import REQUIRED_CHANNEL_ID, REQUIRED_CHANNEL_LINK
+from telegram_resolver import (
+    TelegramResolverInvalidInputError,
+    TelegramResolverNotFoundError,
+    TelegramResolverPeerTypeError,
+    TelegramResolverUnavailableError,
+    normalize_telegram_lookup,
+    resolve_telegram_user,
+)
 from ui_callbacks import (
     DeleteConfirmCallback,
     NavCallback,
@@ -209,6 +217,24 @@ async def _has_required_subscription(bot, user_id: int) -> bool:
     return member.status in ALLOWED_MEMBER_STATUSES
 
 
+async def _remember_telegram_user(user) -> None:
+    if user is None:
+        return
+
+    username = getattr(user, "username", None)
+    normalized_username = (username or "").strip() or None
+    profile_link = f"https://t.me/{normalized_username}" if normalized_username else f"tg://user?id={int(user.id)}"
+
+    await db.upsert_tg_known_user(
+        telegram_user_id=int(user.id),
+        username=normalized_username,
+        first_name=getattr(user, "first_name", None),
+        last_name=getattr(user, "last_name", None),
+        profile_link=profile_link,
+        is_bot=bool(getattr(user, "is_bot", False)),
+    )
+
+
 async def _send_subscription_required(target: Message | CallbackQuery) -> None:
     text = _subscription_required_text()
     reply_markup = _build_subscription_keyboard()
@@ -229,6 +255,7 @@ class SubscriptionRequiredMessageMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         user = event.from_user
+        await _remember_telegram_user(user)
         if user and await _has_required_subscription(event.bot, user.id):
             return await handler(event, data)
 
@@ -247,6 +274,7 @@ class SubscriptionRequiredCallbackMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         user = event.from_user
+        await _remember_telegram_user(user)
         if user and await _has_required_subscription(event.bot, user.id):
             return await handler(event, data)
 
@@ -707,20 +735,6 @@ async def _show_tg_add_prompt(message: Message, state: FSMContext) -> None:
     )
 
 
-def _normalize_tg_input(raw_value: str) -> str:
-    normalized = (raw_value or "").strip()
-    for prefix in ("https://", "http://"):
-        if normalized.lower().startswith(prefix):
-            normalized = normalized[len(prefix):]
-            break
-    if normalized.lower().startswith("t.me/"):
-        normalized = normalized[5:]
-    normalized = normalized.strip().strip("/")
-    if normalized.startswith("@"):
-        normalized = normalized[1:]
-    return normalized.strip()
-
-
 def _tg_display_name(item: dict) -> str:
     first_name = str(item.get("first_name") or "").strip()
     last_name = str(item.get("last_name") or "").strip()
@@ -735,11 +749,14 @@ def _tg_display_name(item: dict) -> str:
 
 async def _save_tg_user_from_shared(message: Message, shared_user: SharedUser) -> tuple[bool, dict]:
     telegram_user_id = int(shared_user.user_id)
+    username = (shared_user.username or "").strip() or None
+    profile_link = f"https://t.me/{username}" if username else f"tg://user?id={telegram_user_id}"
     payload = {
         "telegram_user_id": telegram_user_id,
-        "username": (shared_user.username or "").strip() or None,
+        "username": username,
         "first_name": (shared_user.first_name or "").strip() or None,
         "last_name": (shared_user.last_name or "").strip() or None,
+        "profile_link": profile_link,
     }
     added = await db.add_tg_tracked_user(
         chat_id=message.chat.id,
@@ -747,64 +764,111 @@ async def _save_tg_user_from_shared(message: Message, shared_user: SharedUser) -
         username=payload["username"],
         first_name=payload["first_name"],
         last_name=payload["last_name"],
+        source_value=payload["username"],
+    )
+    await db.upsert_tg_known_user(
+        telegram_user_id=telegram_user_id,
+        username=payload["username"],
+        first_name=payload["first_name"],
+        last_name=payload["last_name"],
+        profile_link=payload["profile_link"],
+        is_bot=False,
     )
     return added, payload
 
 
 async def _resolve_tg_user_from_input(message: Message, raw_value: str) -> tuple[dict | None, str | None]:
-    normalized = _normalize_tg_input(raw_value)
-    if not normalized:
-        return None, "Нужно отправить username, @username, ссылку <code>t.me/...</code> или числовой Telegram user id."
-
-    if normalized.isdigit():
-        telegram_user_id = int(normalized)
-        try:
-            chat = await message.bot.get_chat(telegram_user_id)
-        except TelegramBadRequest:
-            return None, (
-                "Не удалось найти Telegram-пользователя по этому ID.\n"
-                "Проверьте значение или используйте кнопку выбора пользователя [TG]."
-            )
-        if chat.type != "private":
-            return None, "Указанный объект найден, но это не пользователь Telegram."
-        return {
-            "telegram_user_id": int(chat.id),
-            "username": (chat.username or "").strip() or None,
-            "first_name": (chat.first_name or "").strip() or None,
-            "last_name": (chat.last_name or "").strip() or None,
-        }, None
-
-    # Telegram Bot API не всегда позволяет получить user id по произвольному username,
-    # поэтому честно пробуем запрос и при неуспехе просим выбрать пользователя кнопкой.
     try:
-        chat = await message.bot.get_chat(f"@{normalized}")
-    except TelegramBadRequest:
-        return None, (
-            "Не удалось получить Telegram-пользователя по username.\n"
-            "Используйте кнопку выбора пользователя [TG] или отправьте числовой user id, если он известен."
-        )
+        normalized = normalize_telegram_lookup(raw_value)
+    except TelegramResolverInvalidInputError:
+        return None, "Не удалось распознать пользователя. Отправьте username, @username, ссылку t.me/... или числовой id."
 
-    if chat.type != "private":
-        return None, "Указанный объект найден, но это не пользователь Telegram."
+    if normalized.kind == "user_id":
+        known_user = await db.get_tg_known_user_by_id(int(normalized.value))
+        if known_user is not None:
+            return {
+                "telegram_user_id": int(known_user["telegram_user_id"]),
+                "username": known_user.get("username"),
+                "first_name": known_user.get("first_name"),
+                "last_name": known_user.get("last_name"),
+                "access_hash": known_user.get("access_hash"),
+                "profile_link": known_user.get("profile_link"),
+                "avatar_photo_id": known_user.get("avatar_photo_id"),
+                "avatar_dc_id": known_user.get("avatar_dc_id"),
+                "avatar_has_video": bool(known_user.get("avatar_has_video")),
+                "status_text": None,
+                "last_seen_at": None,
+                "lookup_value": str(normalized.value),
+            }, None
+
+    try:
+        resolved = await resolve_telegram_user(raw_value)
+    except TelegramResolverInvalidInputError:
+        return None, "Не удалось распознать пользователя. Отправьте username, @username, ссылку t.me/... или числовой id."
+    except TelegramResolverNotFoundError:
+        if normalized.kind == "user_id":
+            return None, "Не удалось найти Telegram-пользователя по указанному id."
+        return None, "Не удалось найти Telegram-пользователя по указанному username."
+    except TelegramResolverPeerTypeError:
+        return None, (
+            "Указанный username относится не к обычному пользователю Telegram. "
+            "Сейчас бот умеет отслеживать только пользователей."
+        )
+    except TelegramResolverUnavailableError:
+        return None, "Telegram-резолвер сейчас недоступен. Попробуйте позже."
 
     return {
-        "telegram_user_id": int(chat.id),
-        "username": (chat.username or "").strip() or None,
-        "first_name": (chat.first_name or "").strip() or None,
-        "last_name": (chat.last_name or "").strip() or None,
+        "telegram_user_id": resolved.telegram_user_id,
+        "username": resolved.username,
+        "first_name": resolved.first_name,
+        "last_name": resolved.last_name,
+        "access_hash": resolved.access_hash,
+        "profile_link": resolved.profile_link,
+        "avatar_photo_id": resolved.avatar_photo_id,
+        "avatar_dc_id": resolved.avatar_dc_id,
+        "avatar_has_video": resolved.avatar_has_video,
+        "status_text": resolved.status_text,
+        "last_seen_at": resolved.last_seen_at,
+        "lookup_value": resolved.lookup_value,
     }, None
 
 
 async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
+    source_value = str(tg_user.get("lookup_value") or tg_user.get("username") or tg_user["telegram_user_id"])
+    username = str(tg_user.get("username") or "").strip() or None
+    profile_link = str(tg_user.get("profile_link") or "").strip() or None
+    if profile_link is None:
+        profile_link = f"https://t.me/{username}" if username else f"tg://user?id={int(tg_user['telegram_user_id'])}"
+
+    await db.upsert_tg_known_user(
+        telegram_user_id=int(tg_user["telegram_user_id"]),
+        username=username,
+        first_name=tg_user.get("first_name"),
+        last_name=tg_user.get("last_name"),
+        access_hash=tg_user.get("access_hash"),
+        profile_link=profile_link,
+        avatar_photo_id=tg_user.get("avatar_photo_id"),
+        avatar_dc_id=tg_user.get("avatar_dc_id"),
+        avatar_has_video=bool(tg_user.get("avatar_has_video", False)),
+        is_bot=False,
+    )
+
+    if tg_user.get("status_text") or tg_user.get("last_seen_at") is not None:
+        await db.save_tg_last_status(
+            telegram_user_id=int(tg_user["telegram_user_id"]),
+            status_text=tg_user.get("status_text"),
+            last_seen_at=tg_user.get("last_seen_at"),
+        )
+
     added = await db.add_tg_tracked_user(
         chat_id=message.chat.id,
         telegram_user_id=int(tg_user["telegram_user_id"]),
-        username=tg_user.get("username"),
+        username=username,
         first_name=tg_user.get("first_name"),
         last_name=tg_user.get("last_name"),
+        source_value=source_value,
     )
     display_name = _tg_display_name(tg_user)
-    username = str(tg_user.get("username") or "").strip()
     username_line = f"\nUsername: <code>@{_escape_html(username)}</code>" if username else ""
     result_prefix = "Добавлен" if added else "Пользователь уже отслеживается, данные обновлены"
     await message.answer(
@@ -1047,6 +1111,10 @@ async def _show_tg_user_card(message: Message, telegram_user_id: int, source: st
         f"Добавлен: {_format_added_at(detail.get('added_at'))}",
         f"Текущий статус: {_escape_html(status_text)}",
     ]
+    if detail.get("profile_link"):
+        lines.append(f"Ссылка: <a href='{_escape_html(str(detail['profile_link']))}'>{_escape_html(str(detail['profile_link']))}</a>")
+    if detail.get("avatar_photo_id"):
+        lines.append(f"Аватар: photo_id <code>{_escape_html(str(detail['avatar_photo_id']))}</code>")
     if detail.get("last_seen_at"):
         lines.append(f"Последнее обновление статуса: {vk_api.format_timestamp(int(detail['last_seen_at']))}")
 

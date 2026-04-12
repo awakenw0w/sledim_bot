@@ -22,6 +22,14 @@ VK_API_VERSION: str = os.getenv("VK_API_VERSION", "5.131")
 # Путь к файлу базы данных SQLite
 DB_PATH: str = os.getenv("DB_PATH", "bot_database.db")
 
+# Параметры клиентского Telegram MTProto-слоя для резолва username -> user_id.
+# Нужен именно пользовательский session, а не бот-токен.
+TELEGRAM_USERBOT_API_ID_RAW: str = os.getenv("TELEGRAM_USERBOT_API_ID", "").strip()
+TELEGRAM_USERBOT_API_ID: int | None = int(TELEGRAM_USERBOT_API_ID_RAW) if TELEGRAM_USERBOT_API_ID_RAW.isdigit() else None
+TELEGRAM_USERBOT_API_HASH: str = os.getenv("TELEGRAM_USERBOT_API_HASH", "").strip()
+TELEGRAM_USERBOT_SESSION: str = os.getenv("TELEGRAM_USERBOT_SESSION", "").strip()
+TELEGRAM_USERBOT_SESSION_FILE: str = os.getenv("TELEGRAM_USERBOT_SESSION_FILE", "telegram_userbot").strip()
+
 # Интервал проверки онлайн-статуса (в секундах)
 ONLINE_CHECK_INTERVAL: int = int(os.getenv("ONLINE_CHECK_INTERVAL", "60"))
 
