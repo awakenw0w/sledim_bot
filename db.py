@@ -1,8 +1,10 @@
 """
 Модуль для работы с базой данных SQLite.
 Хранит отслеживаемых пользователей, настройки уведомлений,
-последние статусы и онлайн-сессии.
+последние статусы, онлайн-сессии и историю изменений профиля.
 """
+
+import json
 
 import aiosqlite
 
@@ -12,6 +14,16 @@ DEFAULT_NOTIFICATION_MODE = "all"
 VALID_NOTIFICATION_MODES = {"online", "offline", "all", "off"}
 DEFAULT_TG_NOTIFICATION_MODE = "all"
 VALID_TG_NOTIFICATION_MODES = {"online", "offline", "all", "off"}
+TG_CHANGE_NOTIFICATION_COLUMNS = {
+    "first_name": "tg_notify_first_name_changes",
+    "last_name": "tg_notify_last_name_changes",
+    "username": "tg_notify_username_changes",
+    "avatar": "tg_notify_avatar_changes",
+    "gifts": "tg_notify_gifts_changes",
+    "bio": "tg_notify_bio_changes",
+}
+VALID_TG_CHANGE_NOTIFICATION_KEYS = set(TG_CHANGE_NOTIFICATION_COLUMNS)
+DEFAULT_TG_CHANGE_NOTIFICATION_SETTINGS = {key: True for key in TG_CHANGE_NOTIFICATION_COLUMNS}
 CHANGE_NOTIFICATION_COLUMNS = {
     "name": "notify_name_changes",
     "avatar": "notify_avatar_changes",
@@ -80,6 +92,12 @@ async def init_db() -> None:
                 notification_mode          TEXT NOT NULL DEFAULT 'all',
                 tg_notification_mode       TEXT NOT NULL DEFAULT 'all',
                 tg_notify_activity         INTEGER NOT NULL DEFAULT 1,
+                tg_notify_first_name_changes INTEGER NOT NULL DEFAULT 1,
+                tg_notify_last_name_changes  INTEGER NOT NULL DEFAULT 1,
+                tg_notify_username_changes   INTEGER NOT NULL DEFAULT 1,
+                tg_notify_avatar_changes     INTEGER NOT NULL DEFAULT 1,
+                tg_notify_gifts_changes      INTEGER NOT NULL DEFAULT 1,
+                tg_notify_bio_changes        INTEGER NOT NULL DEFAULT 1,
                 notify_name_changes        INTEGER NOT NULL DEFAULT 1,
                 notify_avatar_changes      INTEGER NOT NULL DEFAULT 1,
                 notify_status_changes      INTEGER NOT NULL DEFAULT 1,
@@ -257,14 +275,36 @@ async def init_db() -> None:
                 avatar_photo_id     TEXT,
                 avatar_dc_id        INTEGER,
                 avatar_has_video    INTEGER NOT NULL DEFAULT 0,
+                gifts_count         INTEGER,
+                gifts_supported     INTEGER,
+                bio                 TEXT,
                 is_bot              INTEGER NOT NULL DEFAULT 0,
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tg_profile_change_history (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_user_id    INTEGER NOT NULL,
+                change_type         TEXT NOT NULL,
+                old_value           TEXT,
+                new_value           TEXT,
+                metadata_json       TEXT,
+                changed_at          INTEGER NOT NULL,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
 
         await _ensure_column(db, "chat_settings", "notification_mode", "TEXT NOT NULL DEFAULT 'all'")
         await _ensure_column(db, "chat_settings", "tg_notification_mode", "TEXT NOT NULL DEFAULT 'all'")
         await _ensure_column(db, "chat_settings", "tg_notify_activity", "INTEGER NOT NULL DEFAULT 1")
+        await _ensure_column(db, "chat_settings", "tg_notify_first_name_changes", "INTEGER NOT NULL DEFAULT 1")
+        await _ensure_column(db, "chat_settings", "tg_notify_last_name_changes", "INTEGER NOT NULL DEFAULT 1")
+        await _ensure_column(db, "chat_settings", "tg_notify_username_changes", "INTEGER NOT NULL DEFAULT 1")
+        await _ensure_column(db, "chat_settings", "tg_notify_avatar_changes", "INTEGER NOT NULL DEFAULT 1")
+        await _ensure_column(db, "chat_settings", "tg_notify_gifts_changes", "INTEGER NOT NULL DEFAULT 1")
+        await _ensure_column(db, "chat_settings", "tg_notify_bio_changes", "INTEGER NOT NULL DEFAULT 1")
         await _ensure_column(db, "chat_settings", "notify_name_changes", "INTEGER NOT NULL DEFAULT 1")
         await _ensure_column(db, "chat_settings", "notify_avatar_changes", "INTEGER NOT NULL DEFAULT 1")
         await _ensure_column(db, "chat_settings", "notify_status_changes", "INTEGER NOT NULL DEFAULT 1")
@@ -305,6 +345,9 @@ async def init_db() -> None:
         await _ensure_column(db, "tg_known_users", "avatar_photo_id", "TEXT")
         await _ensure_column(db, "tg_known_users", "avatar_dc_id", "INTEGER")
         await _ensure_column(db, "tg_known_users", "avatar_has_video", "INTEGER NOT NULL DEFAULT 0")
+        await _ensure_column(db, "tg_known_users", "gifts_count", "INTEGER")
+        await _ensure_column(db, "tg_known_users", "gifts_supported", "INTEGER")
+        await _ensure_column(db, "tg_known_users", "bio", "TEXT")
         await _ensure_column(db, "tg_last_status", "is_online", "INTEGER")
         await _ensure_column(db, "tg_last_status", "status_kind", "TEXT")
         await _ensure_column(db, "tg_last_status", "activity_at", "INTEGER")
@@ -425,6 +468,38 @@ async def add_tg_tracked_user(
         return int(row[1]) == 0
 
 
+async def sync_tg_tracked_user_profile(
+    telegram_user_id: int,
+    *,
+    username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+) -> None:
+    """Синхронизирует дублируемые поля TG-пользователя во всех строках отслеживания."""
+    normalized_username = (username or "").strip().lstrip("@") or None
+    normalized_first_name = (first_name or "").strip() or None
+    normalized_last_name = (last_name or "").strip() or None
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE tg_tracked_users
+            SET
+                username = ?,
+                first_name = ?,
+                last_name = ?
+            WHERE telegram_user_id = ?
+            """,
+            (
+                normalized_username,
+                normalized_first_name,
+                normalized_last_name,
+                telegram_user_id,
+            ),
+        )
+        await db.commit()
+
+
 async def upsert_tg_known_user(
     telegram_user_id: int,
     username: str | None = None,
@@ -435,6 +510,9 @@ async def upsert_tg_known_user(
     avatar_photo_id: str | None = None,
     avatar_dc_id: int | None = None,
     avatar_has_video: bool = False,
+    gifts_count: int | None = None,
+    gifts_supported: bool | None = None,
+    bio: str | None = None,
     is_bot: bool = False,
 ) -> None:
     """Сохраняет или обновляет известного Telegram-пользователя, которого бот уже видел."""
@@ -457,18 +535,24 @@ async def upsert_tg_known_user(
                 avatar_photo_id,
                 avatar_dc_id,
                 avatar_has_video,
+                gifts_count,
+                gifts_supported,
+                bio,
                 is_bot,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(telegram_user_id) DO UPDATE SET
-                username = COALESCE(excluded.username, tg_known_users.username),
-                first_name = COALESCE(excluded.first_name, tg_known_users.first_name),
-                last_name = COALESCE(excluded.last_name, tg_known_users.last_name),
+                username = excluded.username,
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
                 access_hash = COALESCE(excluded.access_hash, tg_known_users.access_hash),
-                profile_link = COALESCE(excluded.profile_link, tg_known_users.profile_link),
-                avatar_photo_id = COALESCE(excluded.avatar_photo_id, tg_known_users.avatar_photo_id),
-                avatar_dc_id = COALESCE(excluded.avatar_dc_id, tg_known_users.avatar_dc_id),
+                profile_link = excluded.profile_link,
+                avatar_photo_id = excluded.avatar_photo_id,
+                avatar_dc_id = excluded.avatar_dc_id,
                 avatar_has_video = excluded.avatar_has_video,
+                gifts_count = excluded.gifts_count,
+                gifts_supported = excluded.gifts_supported,
+                bio = excluded.bio,
                 is_bot = excluded.is_bot,
                 updated_at = datetime('now')
             """,
@@ -482,6 +566,9 @@ async def upsert_tg_known_user(
                 normalized_avatar_photo_id,
                 avatar_dc_id,
                 1 if avatar_has_video else 0,
+                gifts_count,
+                None if gifts_supported is None else (1 if gifts_supported else 0),
+                (bio or "").strip() or None,
                 1 if is_bot else 0,
             ),
         )
@@ -507,6 +594,9 @@ async def get_tg_known_user_by_username(username: str) -> dict | None:
                 avatar_photo_id,
                 avatar_dc_id,
                 avatar_has_video,
+                gifts_count,
+                gifts_supported,
+                bio,
                 is_bot,
                 updated_at
             FROM tg_known_users
@@ -530,8 +620,11 @@ async def get_tg_known_user_by_username(username: str) -> dict | None:
         "avatar_photo_id": row[6],
         "avatar_dc_id": row[7],
         "avatar_has_video": bool(row[8]),
-        "is_bot": bool(row[9]),
-        "updated_at": row[10],
+        "gifts_count": row[9],
+        "gifts_supported": None if row[10] is None else bool(row[10]),
+        "bio": row[11],
+        "is_bot": bool(row[12]),
+        "updated_at": row[13],
     }
 
 
@@ -550,6 +643,9 @@ async def get_tg_known_user_by_id(telegram_user_id: int) -> dict | None:
                 avatar_photo_id,
                 avatar_dc_id,
                 avatar_has_video,
+                gifts_count,
+                gifts_supported,
+                bio,
                 is_bot,
                 updated_at
             FROM tg_known_users
@@ -573,8 +669,11 @@ async def get_tg_known_user_by_id(telegram_user_id: int) -> dict | None:
         "avatar_photo_id": row[6],
         "avatar_dc_id": row[7],
         "avatar_has_video": bool(row[8]),
-        "is_bot": bool(row[9]),
-        "updated_at": row[10],
+        "gifts_count": row[9],
+        "gifts_supported": None if row[10] is None else bool(row[10]),
+        "bio": row[11],
+        "is_bot": bool(row[12]),
+        "updated_at": row[13],
     }
 
 
@@ -850,6 +949,9 @@ async def get_tg_tracked_user_detail(chat_id: int, telegram_user_id: int) -> dic
                 k.avatar_photo_id,
                 k.avatar_dc_id,
                 k.avatar_has_video,
+                k.gifts_count,
+                k.gifts_supported,
+                k.bio,
                 s.status_text,
                 s.last_seen_at,
                 s.is_online,
@@ -884,12 +986,15 @@ async def get_tg_tracked_user_detail(chat_id: int, telegram_user_id: int) -> dic
         "avatar_photo_id": row[11],
         "avatar_dc_id": row[12],
         "avatar_has_video": bool(row[13]),
-        "status_text": row[14],
-        "last_seen_at": row[15],
-        "is_online": None if row[16] is None else bool(row[16]),
-        "status_kind": row[17],
-        "activity_at": row[18],
-        "status_updated_at": row[19],
+        "gifts_count": row[14],
+        "gifts_supported": None if row[15] is None else bool(row[15]),
+        "bio": row[16],
+        "status_text": row[17],
+        "last_seen_at": row[18],
+        "is_online": None if row[19] is None else bool(row[19]),
+        "status_kind": row[20],
+        "activity_at": row[21],
+        "status_updated_at": row[22],
     }
 
 
@@ -911,6 +1016,9 @@ async def get_tg_tracked_users_details(chat_id: int, active_only: bool = True) -
             k.avatar_photo_id,
             k.avatar_dc_id,
             k.avatar_has_video,
+            k.gifts_count,
+            k.gifts_supported,
+            k.bio,
             s.status_text,
             s.last_seen_at,
             s.is_online,
@@ -954,12 +1062,15 @@ async def get_tg_tracked_users_details(chat_id: int, active_only: bool = True) -
             "avatar_photo_id": row[11],
             "avatar_dc_id": row[12],
             "avatar_has_video": bool(row[13]),
-            "status_text": row[14],
-            "last_seen_at": row[15],
-            "is_online": None if row[16] is None else bool(row[16]),
-            "status_kind": row[17],
-            "activity_at": row[18],
-            "status_updated_at": row[19],
+            "gifts_count": row[14],
+            "gifts_supported": None if row[15] is None else bool(row[15]),
+            "bio": row[16],
+            "status_text": row[17],
+            "last_seen_at": row[18],
+            "is_online": None if row[19] is None else bool(row[19]),
+            "status_kind": row[20],
+            "activity_at": row[21],
+            "status_updated_at": row[22],
         }
         for row in rows
     ]
@@ -1170,6 +1281,62 @@ async def toggle_tg_activity_notification(chat_id: int) -> bool:
     current_value = await get_tg_activity_notification_enabled(chat_id)
     new_value = not current_value
     await set_tg_activity_notification_enabled(chat_id, new_value)
+    return new_value
+
+
+async def get_tg_change_notification_settings(chat_id: int) -> dict[str, bool]:
+    """Возвращает настройки TG-уведомлений по изменениям профиля."""
+    select_columns = ", ".join(TG_CHANGE_NOTIFICATION_COLUMNS.values())
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_chat_settings_row(db, chat_id)
+        async with db.execute(
+            f"SELECT {select_columns} FROM chat_settings WHERE chat_id = ?",
+            (chat_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        await db.commit()
+
+    if row is None:
+        return dict(DEFAULT_TG_CHANGE_NOTIFICATION_SETTINGS)
+
+    return {
+        key: bool(row[index])
+        for index, key in enumerate(TG_CHANGE_NOTIFICATION_COLUMNS)
+    }
+
+
+async def set_tg_change_notification_enabled(chat_id: int, key: str, enabled: bool) -> bool:
+    """Включает или отключает отдельный тип TG-уведомлений по изменениям профиля."""
+    normalized_key = (key or "").strip().lower()
+    if normalized_key not in VALID_TG_CHANGE_NOTIFICATION_KEYS:
+        raise ValueError(f"Unsupported TG change notification key: {key}")
+
+    column_name = TG_CHANGE_NOTIFICATION_COLUMNS[normalized_key]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_chat_settings_row(db, chat_id)
+        await db.execute(
+            f"""
+            UPDATE chat_settings
+            SET {column_name} = ?, updated_at = datetime('now')
+            WHERE chat_id = ?
+            """,
+            (1 if enabled else 0, chat_id),
+        )
+        await db.commit()
+
+    return enabled
+
+
+async def toggle_tg_change_notification(chat_id: int, key: str) -> bool:
+    """Переключает состояние TG-уведомлений по выбранной категории профиля."""
+    current_settings = await get_tg_change_notification_settings(chat_id)
+    normalized_key = (key or "").strip().lower()
+    if normalized_key not in current_settings:
+        raise ValueError(f"Unsupported TG change notification key: {key}")
+
+    new_value = not bool(current_settings[normalized_key])
+    await set_tg_change_notification_enabled(chat_id, normalized_key, new_value)
     return new_value
 
 
@@ -1666,6 +1833,130 @@ async def save_wall_post_snapshot(
                 ])
 
         await db.commit()
+
+
+async def get_last_tg_profile_change(telegram_user_id: int, change_type: str) -> dict | None:
+    """Возвращает самую последнюю запись об изменении конкретного типа для TG-пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT old_value, new_value, changed_at
+            FROM tg_profile_change_history
+            WHERE telegram_user_id = ? AND change_type = ?
+            ORDER BY changed_at DESC
+            LIMIT 1
+        """, (telegram_user_id, change_type)) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "old_value": row[0],
+        "new_value": row[1],
+        "changed_at": row[2],
+    }
+
+
+async def add_tg_profile_changes(telegram_user_id: int, changes: list[dict], changed_at: int) -> None:
+    """Пишет изменения TG-профиля в историю."""
+    if not changes:
+        return
+
+    rows = []
+    for change in changes:
+        metadata = change.get("metadata")
+        rows.append(
+            (
+                telegram_user_id,
+                str(change["change_type"]),
+                change.get("old_value"),
+                change.get("new_value"),
+                json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
+                changed_at,
+            )
+        )
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            """
+            INSERT INTO tg_profile_change_history (
+                telegram_user_id,
+                change_type,
+                old_value,
+                new_value,
+                metadata_json,
+                changed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        await db.commit()
+
+
+async def get_tg_profile_changes_for_report(
+    chat_id: int,
+    telegram_user_id: int,
+    change_types: list[str] | None = None,
+    since_ts: int | None = None,
+    limit: int = 300,
+) -> list[dict]:
+    """Возвращает историю TG-изменений с фильтрацией по пользователю, типу и периоду."""
+    query = """
+        SELECT
+            h.id,
+            h.telegram_user_id,
+            h.change_type,
+            h.old_value,
+            h.new_value,
+            h.metadata_json,
+            h.changed_at
+        FROM tg_profile_change_history AS h
+        INNER JOIN tg_tracked_users AS t
+            ON t.telegram_user_id = h.telegram_user_id
+            AND t.chat_id = ?
+            AND t.is_active = 1
+        WHERE h.telegram_user_id = ?
+    """
+    params: list = [chat_id, telegram_user_id]
+
+    if change_types:
+        placeholders = ", ".join("?" for _ in change_types)
+        query += f" AND h.change_type IN ({placeholders})"
+        params.extend(change_types)
+
+    if since_ts is not None:
+        query += " AND h.changed_at >= ?"
+        params.append(since_ts)
+
+    query += " ORDER BY h.changed_at DESC, h.id DESC LIMIT ?"
+    params.append(limit)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+
+    result: list[dict] = []
+    for row in rows:
+        metadata = None
+        if row[5]:
+            try:
+                metadata = json.loads(row[5])
+            except json.JSONDecodeError:
+                metadata = {"raw": row[5]}
+        result.append(
+            {
+                "id": row[0],
+                "telegram_user_id": row[1],
+                "change_type": row[2],
+                "old_value": row[3],
+                "new_value": row[4],
+                "metadata": metadata,
+                "changed_at": row[6],
+            }
+        )
+
+    return result
 
 
 async def get_tg_open_session(chat_id: int, telegram_user_id: int) -> dict | None:

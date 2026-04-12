@@ -79,3 +79,16 @@ class TgNotifyModeCallback(CallbackData, prefix="tgn"):
 
 class TgNotifyToggleCallback(CallbackData, prefix="tgt"):
     key: str
+
+
+class TgProfileChangeTypeCallback(CallbackData, prefix="tgc"):
+    tg_id: int
+    key: str
+    src: str
+
+
+class TgProfileChangePeriodCallback(CallbackData, prefix="tgr"):
+    tg_id: int
+    key: str
+    days: int
+    src: str

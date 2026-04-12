@@ -68,6 +68,9 @@ class ResolvedTelegramUser:
     status_kind: str | None
     is_online: bool | None
     activity_at: int | None
+    gifts_count: int | None
+    gifts_supported: bool | None
+    bio: str | None
     profile_link: str
     lookup_value: str
 
@@ -142,12 +145,40 @@ def _build_avatar_payload(photo: object | None) -> tuple[str | None, int | None,
     return photo_id, dc_id, has_video
 
 
-def _to_resolved_user(user: types.User, lookup_value: str, checked_at: int) -> ResolvedTelegramUser:
+def _build_gifts_payload(full_user: types.UserFull | None) -> tuple[int | None, bool | None]:
+    if full_user is None:
+        return None, None
+
+    gifts_count = getattr(full_user, "stargifts_count", None)
+    display_gifts_button = bool(getattr(full_user, "display_gifts_button", False))
+    gifts_supported = gifts_count is not None or display_gifts_button
+    return gifts_count, gifts_supported
+
+
+def _build_bio_payload(full_user: types.UserFull | None) -> str | None:
+    """Извлекает bio (описание профиля) из расширенного профиля пользователя."""
+    if full_user is None:
+        return None
+    raw_about = getattr(full_user, "about", None)
+    if raw_about is None:
+        return None
+    normalized = str(raw_about).strip()
+    return normalized or None
+
+
+def _to_resolved_user(
+    user: types.User,
+    lookup_value: str,
+    checked_at: int,
+    full_user: types.UserFull | None = None,
+) -> ResolvedTelegramUser:
     status_text, last_seen_at, status_kind, is_online, activity_at = _build_status_payload(
         getattr(user, "status", None),
         checked_at=checked_at,
     )
     avatar_photo_id, avatar_dc_id, avatar_has_video = _build_avatar_payload(getattr(user, "photo", None))
+    gifts_count, gifts_supported = _build_gifts_payload(full_user)
+    bio = _build_bio_payload(full_user)
     username = (getattr(user, "username", None) or "").strip() or None
     profile_link = f"https://t.me/{username}" if username else f"tg://user?id={int(user.id)}"
 
@@ -166,6 +197,9 @@ def _to_resolved_user(user: types.User, lookup_value: str, checked_at: int) -> R
         status_kind=status_kind,
         is_online=is_online,
         activity_at=activity_at,
+        gifts_count=gifts_count,
+        gifts_supported=gifts_supported,
+        bio=bio,
         profile_link=profile_link,
         lookup_value=lookup_value,
     )
@@ -267,6 +301,18 @@ class TelegramResolver:
 
         return self._ensure_regular_user(entity)
 
+    async def _get_full_user_by_input(self, telegram_user_id: int, access_hash: int) -> types.UserFull | None:
+        client = await self._get_client()
+        result = await client(
+            functions.users.GetFullUserRequest(
+                id=types.InputUser(user_id=int(telegram_user_id), access_hash=int(access_hash))
+            )
+        )
+        full_user = getattr(result, "full_user", None)
+        if isinstance(full_user, types.UserFull):
+            return full_user
+        return None
+
     async def get_user_snapshot(
         self,
         telegram_user_id: int,
@@ -281,7 +327,21 @@ class TelegramResolver:
             try:
                 entity = await self._get_users_by_input(telegram_user_id, access_hash)
                 if entity is not None:
-                    return _to_resolved_user(entity, str(normalized_username or telegram_user_id), checked_at)
+                    full_user = None
+                    try:
+                        full_user = await self._get_full_user_by_input(telegram_user_id, access_hash)
+                    except errors.RPCError as exc:
+                        logger.debug(
+                            "Не удалось получить расширенный TG-профиль user_id=%s: %s",
+                            telegram_user_id,
+                            exc,
+                        )
+                    return _to_resolved_user(
+                        entity,
+                        str(normalized_username or telegram_user_id),
+                        checked_at,
+                        full_user=full_user,
+                    )
             except TelegramResolverPeerTypeError:
                 raise
             except errors.RPCError as exc:
@@ -304,7 +364,18 @@ class TelegramResolver:
                 entity = await self._resolve_user_by_lookup(
                     NormalizedTelegramLookup(kind="username", value=normalized_username)
                 )
-                return _to_resolved_user(entity, normalized_username, checked_at)
+                full_user = None
+                if getattr(entity, "access_hash", None) is not None:
+                    try:
+                        full_user = await self._get_full_user_by_input(int(entity.id), int(entity.access_hash))
+                    except errors.RPCError as exc:
+                        logger.debug(
+                            "Не удалось получить расширенный TG-профиль user_id=%s по username=%s: %s",
+                            entity.id,
+                            normalized_username,
+                            exc,
+                        )
+                return _to_resolved_user(entity, normalized_username, checked_at, full_user=full_user)
             except TelegramResolverNotFoundError:
                 pass
             except TelegramResolverPeerTypeError:
@@ -316,7 +387,17 @@ class TelegramResolver:
             entity = await self._resolve_user_by_lookup(
                 NormalizedTelegramLookup(kind="user_id", value=int(telegram_user_id))
             )
-            return _to_resolved_user(entity, str(telegram_user_id), checked_at)
+            full_user = None
+            if getattr(entity, "access_hash", None) is not None:
+                try:
+                    full_user = await self._get_full_user_by_input(int(entity.id), int(entity.access_hash))
+                except errors.RPCError as exc:
+                    logger.debug(
+                        "Не удалось получить расширенный TG-профиль user_id=%s по id: %s",
+                        telegram_user_id,
+                        exc,
+                    )
+            return _to_resolved_user(entity, str(telegram_user_id), checked_at, full_user=full_user)
         except TelegramResolverNotFoundError:
             if rpc_error is not None:
                 raise TelegramResolverUnavailableError from rpc_error
@@ -339,7 +420,17 @@ class TelegramResolver:
         lookup = normalize_telegram_lookup(raw_value)
         entity = await self._resolve_user_by_lookup(lookup)
         checked_at = int(datetime.now(tz=timezone.utc).timestamp())
-        return _to_resolved_user(entity, str(lookup.value), checked_at)
+        full_user = None
+        if getattr(entity, "access_hash", None) is not None:
+            try:
+                full_user = await self._get_full_user_by_input(int(entity.id), int(entity.access_hash))
+            except errors.RPCError as exc:
+                logger.debug(
+                    "Не удалось получить расширенный TG-профиль user_id=%s при resolve: %s",
+                    entity.id,
+                    exc,
+                )
+        return _to_resolved_user(entity, str(lookup.value), checked_at, full_user=full_user)
 
 
 telegram_resolver = TelegramResolver()

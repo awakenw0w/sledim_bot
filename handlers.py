@@ -44,6 +44,8 @@ from ui_callbacks import (
     ProfileChangeUserCallback,
     TgDeleteConfirmCallback,
     TgNotifyModeCallback,
+    TgProfileChangePeriodCallback,
+    TgProfileChangeTypeCallback,
     TgNotifyToggleCallback,
     TgPeriodSelectCallback,
     TgUserActionCallback,
@@ -86,6 +88,9 @@ from ui_keyboards import (
     tg_add_user_reply_keyboard,
     tg_delete_confirm_keyboard,
     tg_notification_settings_keyboard,
+    tg_profile_change_period_keyboard,
+    tg_profile_change_result_keyboard,
+    tg_profile_change_type_keyboard,
     tg_report_period_keyboard,
     tg_report_result_keyboard,
     tracked_list_chunk_keyboard,
@@ -186,6 +191,36 @@ PROFILE_CHANGE_FILTERS: dict[str, dict[str, Any]] = {
 }
 PROFILE_CHANGE_LABELS = {"wall_post": "Пост"}
 TG_NOTIFICATION_TOGGLE_LABELS = {"activity": "Активность / last seen [TG]"}
+TG_CHANGE_NOTIFICATION_LABELS = {
+    "first_name": "Имя [TG]",
+    "last_name": "Фамилия [TG]",
+    "username": "Username [TG]",
+    "avatar": "Аватарка [TG]",
+    "gifts": "Подарки [TG]",
+    "bio": "Bio [TG]",
+}
+TG_PROFILE_CHANGE_TYPE_ITEMS: list[tuple[str, str]] = [
+    ("🗂️ Все изменения [TG]", "all"),
+    ("👤 Имя [TG]", "first_name"),
+    ("👤 Фамилия [TG]", "last_name"),
+    ("🔗 Username [TG]", "username"),
+    ("🖼️ Аватарка [TG]", "avatar"),
+    ("🎁 Подарки [TG]", "gifts"),
+    ("📝 Bio [TG]", "bio"),
+    ("🟡 Активность / last seen [TG]", "activity"),
+    ("🟢🔴 Онлайн изменения [TG]", "online"),
+]
+TG_PROFILE_CHANGE_FILTERS: dict[str, dict[str, Any]] = {
+    "all": {"label": "Все изменения [TG]", "types": None, "supported": True},
+    "first_name": {"label": "Имя [TG]", "types": ["first_name"], "supported": True},
+    "last_name": {"label": "Фамилия [TG]", "types": ["last_name"], "supported": True},
+    "username": {"label": "Username [TG]", "types": ["username"], "supported": True},
+    "avatar": {"label": "Аватарка [TG]", "types": ["avatar"], "supported": True},
+    "gifts": {"label": "Подарки [TG]", "types": ["gifts"], "supported": True},
+    "bio": {"label": "Bio [TG]", "types": ["bio"], "supported": True},
+    "activity": {"label": "Активность / last seen [TG]", "types": ["activity"], "supported": True},
+    "online": {"label": "Онлайн изменения [TG]", "types": ["online"], "supported": True},
+}
 
 
 def _build_subscription_keyboard() -> InlineKeyboardMarkup:
@@ -239,6 +274,12 @@ async def _remember_telegram_user(user) -> None:
         last_name=getattr(user, "last_name", None),
         profile_link=profile_link,
         is_bot=bool(getattr(user, "is_bot", False)),
+    )
+    await db.sync_tg_tracked_user_profile(
+        int(user.id),
+        username=normalized_username,
+        first_name=getattr(user, "first_name", None),
+        last_name=getattr(user, "last_name", None),
     )
 
 
@@ -362,6 +403,86 @@ def _get_profile_change_meta(change_key: str) -> dict[str, Any]:
 
 def _get_profile_change_label(field_name: str) -> str:
     return PROFILE_CHANGE_LABELS.get(field_name, vk_api.PROFILE_FIELD_LABELS.get(field_name, field_name))
+
+
+def _get_tg_profile_change_meta(change_key: str) -> dict[str, Any]:
+    return TG_PROFILE_CHANGE_FILTERS.get(change_key, TG_PROFILE_CHANGE_FILTERS["all"])
+
+
+def _format_tg_change_value(change_type: str, value: str | None, metadata: dict | None = None) -> str:
+    normalized = (value or "").strip()
+    metadata = metadata or {}
+
+    if change_type in {"first_name", "last_name"}:
+        return normalized or "не указано"
+
+    if change_type == "username":
+        return f"@{normalized}" if normalized else "не указан"
+
+    if change_type == "avatar":
+        return f"photo_id {normalized}" if normalized else "аватарка отсутствует"
+
+    if change_type == "gifts":
+        if normalized.isdigit():
+            suffix = "подарков"
+            return f"{normalized} {suffix}"
+        return normalized or "нет данных"
+
+    if change_type == "online":
+        if normalized == "online":
+            return "онлайн"
+        if normalized == "offline":
+            return "офлайн"
+        return normalized or "неизвестно"
+
+    if change_type == "activity":
+        return normalized or "неизвестно"
+
+    if change_type == "bio":
+        return normalized or "описание удалено"
+
+    return normalized or "не указано"
+
+
+def _build_tg_profile_change_block(change: dict) -> str:
+    change_type = str(change.get("change_type") or "")
+    changed_at = vk_api.format_timestamp(int(change["changed_at"]))
+    meta = change.get("metadata") or {}
+    label = TG_PROFILE_CHANGE_FILTERS.get(change_type, {"label": change_type}).get("label", change_type)
+
+    if change_type == "avatar":
+        old_value = _format_tg_change_value(change_type, change.get("old_value"), meta)
+        new_value = _format_tg_change_value(change_type, change.get("new_value"), meta)
+        return (
+            f"• {changed_at} — <b>{_escape_html(label)}</b>\n"
+            f"Было: <code>{_escape_html(old_value)}</code>\n"
+            f"Стало: <code>{_escape_html(new_value)}</code>"
+        )
+
+    if change_type == "gifts" and bool(meta.get("count_only", False)):
+        old_value = _format_tg_change_value(change_type, change.get("old_value"), meta)
+        new_value = _format_tg_change_value(change_type, change.get("new_value"), meta)
+        return (
+            f"• {changed_at} — <b>{_escape_html(label)}</b>\n"
+            f"Счетчик: <code>{_escape_html(old_value)}</code> → <code>{_escape_html(new_value)}</code>\n"
+            "Доступен только счетчик подарков, без списка самих подарков."
+        )
+
+    old_value = _format_tg_change_value(change_type, change.get("old_value"), meta)
+    new_value = _format_tg_change_value(change_type, change.get("new_value"), meta)
+
+    if change_type == "bio":
+        return (
+            f"• {changed_at} — <b>{_escape_html(label)}</b>\n"
+            f"Было: <code>{_escape_html(_truncate_text(old_value, 150))}</code>\n"
+            f"Стало: <code>{_escape_html(_truncate_text(new_value, 150))}</code>"
+        )
+
+    return (
+        f"• {changed_at} — <b>{_escape_html(label)}</b>\n"
+        f"Было: <code>{_escape_html(old_value)}</code>\n"
+        f"Стало: <code>{_escape_html(new_value)}</code>"
+    )
 
 
 def _parse_wall_post_value(value: str | None) -> tuple[str | None, str | None]:
@@ -685,12 +806,14 @@ def _build_help_text(current_mode: str, change_settings: dict[str, bool]) -> str
         "<b>Как открыть отчеты:</b>\n"
         f"• для персонального отчета по VK зайдите в <b>{BTN_PLATFORM_VK}</b> → <b>{BTN_TRACKED_LIST}</b>\n"
         f"• для персонального отчета по TG зайдите в <b>{BTN_PLATFORM_TG}</b> → <b>{BTN_TRACKED_LIST_TG}</b>\n"
-        "• откройте карточку нужного пользователя и выберите тип отчета\n"
+        "• откройте карточку нужного пользователя и выберите нужный тип отчета\n"
+        "• в TG-карточке доступны отчет по онлайну и отчет по изменениям профиля\n"
         f"• для общего отчета используйте <b>{BTN_GENERAL_REPORT}</b> и затем нужную платформу\n"
         "• персональные отчеты VK и TG не смешиваются между собой\n\n"
         "<b>Как работают уведомления:</b>\n"
         f"• в разделе <b>{BTN_NOTIFY_VK}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна и изменениях профиля VK\n"
-        f"• в разделе <b>{BTN_NOTIFY_TG}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна и activity / last seen Telegram\n"
+        f"• в разделе <b>{BTN_NOTIFY_TG}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна, activity / last seen и изменениях профиля Telegram\n"
+        "• по подаркам Telegram бот использует только тот объем данных, который реально доступен клиентскому слою\n"
         "• если уведомления не приходят, проверьте, что отслеживание включено и что нужный режим уведомлений не отключен\n\n"
         "<b>Почему время онлайна может иметь погрешность:</b>\n"
         "• бот опрашивает платформу с интервалом, поэтому короткие входы и выходы могут округляться или фиксироваться с небольшой задержкой\n"
@@ -837,6 +960,12 @@ async def _save_tg_user_from_shared(message: Message, shared_user: SharedUser) -
         profile_link=payload["profile_link"],
         is_bot=False,
     )
+    await db.sync_tg_tracked_user_profile(
+        telegram_user_id,
+        username=payload["username"],
+        first_name=payload["first_name"],
+        last_name=payload["last_name"],
+    )
     return added, payload
 
 
@@ -859,6 +988,8 @@ async def _resolve_tg_user_from_input(message: Message, raw_value: str) -> tuple
                 "avatar_photo_id": known_user.get("avatar_photo_id"),
                 "avatar_dc_id": known_user.get("avatar_dc_id"),
                 "avatar_has_video": bool(known_user.get("avatar_has_video")),
+                "gifts_count": known_user.get("gifts_count"),
+                "gifts_supported": known_user.get("gifts_supported"),
                 "status_text": None,
                 "last_seen_at": None,
                 "is_online": None,
@@ -893,6 +1024,8 @@ async def _resolve_tg_user_from_input(message: Message, raw_value: str) -> tuple
         "avatar_photo_id": resolved.avatar_photo_id,
         "avatar_dc_id": resolved.avatar_dc_id,
         "avatar_has_video": resolved.avatar_has_video,
+        "gifts_count": resolved.gifts_count,
+        "gifts_supported": resolved.gifts_supported,
         "status_text": resolved.status_text,
         "last_seen_at": resolved.last_seen_at,
         "is_online": resolved.is_online,
@@ -919,7 +1052,15 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
         avatar_photo_id=tg_user.get("avatar_photo_id"),
         avatar_dc_id=tg_user.get("avatar_dc_id"),
         avatar_has_video=bool(tg_user.get("avatar_has_video", False)),
+        gifts_count=tg_user.get("gifts_count"),
+        gifts_supported=tg_user.get("gifts_supported"),
         is_bot=False,
+    )
+    await db.sync_tg_tracked_user_profile(
+        int(tg_user["telegram_user_id"]),
+        username=username,
+        first_name=tg_user.get("first_name"),
+        last_name=tg_user.get("last_name"),
     )
 
     if tg_user.get("status_text") or tg_user.get("last_seen_at") is not None:
@@ -1188,6 +1329,11 @@ async def _show_tg_user_card(message: Message, telegram_user_id: int, source: st
         lines.append(f"Ссылка: <a href='{_escape_html(str(detail['profile_link']))}'>{_escape_html(str(detail['profile_link']))}</a>")
     if detail.get("avatar_photo_id"):
         lines.append(f"Аватар: photo_id <code>{_escape_html(str(detail['avatar_photo_id']))}</code>")
+    if detail.get("bio"):
+        lines.append(f"Bio: <i>{_escape_html(str(detail['bio']))}</i>")
+    if detail.get("gifts_supported") is True:
+        gifts_count = int(detail.get("gifts_count") or 0)
+        lines.append(f"Подарки: <b>{gifts_count}</b> (доступен только счетчик)")
     if detail.get("status_updated_at"):
         lines.append(f"Последнее обновление статуса: {_format_added_at(detail.get('status_updated_at'))}")
 
@@ -1219,15 +1365,23 @@ async def _show_tg_notification_settings(
 ) -> None:
     current_mode = await db.get_tg_notification_mode(message.chat.id)
     activity_enabled = await db.get_tg_activity_notification_enabled(message.chat.id)
+    change_settings = await db.get_tg_change_notification_settings(message.chat.id)
     await message.answer(
         text
         or (
             "🔔 Здесь можно отдельно настроить уведомления Telegram [TG]:\n"
             "• 🟢🔴 уведомления о входе и выходе из онлайна\n"
             "• 🟡 уведомления по activity / last seen\n\n"
+            "• 👤🔗🖼️📝 уведомления по изменениям имени, фамилии, username, аватарки и bio\n"
+            "• 🎁 по подаркам доступен только graceful fallback: если клиентский слой вернет счетчик подарков, бот зафиксирует изменение количества\n\n"
             "👇 Нажмите на нужную кнопку, чтобы изменить настройку."
         ),
-        reply_markup=tg_notification_settings_keyboard(current_mode, activity_enabled, back_target=back_target),
+        reply_markup=tg_notification_settings_keyboard(
+            current_mode,
+            activity_enabled,
+            change_settings,
+            back_target=back_target,
+        ),
     )
 
 
@@ -1344,6 +1498,114 @@ async def _build_tg_general_report_blocks(chat_id: int, days: int) -> list[str]:
         blocks.append("\n".join(lines))
 
     return blocks
+
+
+async def _show_tg_profile_change_type_picker(message: Message, telegram_user_id: int, source: str) -> None:
+    detail = await db.get_tg_tracked_user_detail(message.chat.id, telegram_user_id)
+    if detail is None:
+        await message.answer(
+            "⚠️ Telegram-пользователь не найден в отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(
+        f"🧩 Выберите тип изменений профиля [TG] для <b>{_escape_html(_tg_display_name(detail))}</b>.",
+        reply_markup=tg_profile_change_type_keyboard(telegram_user_id, TG_PROFILE_CHANGE_TYPE_ITEMS, source),
+    )
+
+
+async def _show_tg_profile_change_period_picker(
+    message: Message,
+    telegram_user_id: int,
+    change_key: str,
+    source: str,
+) -> None:
+    detail = await db.get_tg_tracked_user_detail(message.chat.id, telegram_user_id)
+    if detail is None:
+        await message.answer(
+            "⚠️ Telegram-пользователь не найден в отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    meta = _get_tg_profile_change_meta(change_key)
+    await message.answer(
+        f"🗓️ Выберите период для отчета: <b>{_escape_html(str(meta['label']))}</b>.",
+        reply_markup=tg_profile_change_period_keyboard(telegram_user_id, change_key, source),
+    )
+
+
+async def _show_tg_profile_change_report(
+    message: Message,
+    telegram_user_id: int,
+    change_key: str,
+    days: int,
+    source: str,
+) -> None:
+    detail = await db.get_tg_tracked_user_detail(message.chat.id, telegram_user_id)
+    if detail is None:
+        await message.answer(
+            "⚠️ Telegram-пользователь не найден в отслеживаемых.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    meta = _get_tg_profile_change_meta(change_key)
+    change_label = str(meta["label"])
+    change_types = meta.get("types")
+    changes = await db.get_tg_profile_changes_for_report(
+        chat_id=message.chat.id,
+        telegram_user_id=telegram_user_id,
+        change_types=list(change_types) if isinstance(change_types, list) else None,
+        since_ts=_period_to_since_ts(days),
+        limit=300,
+    )
+
+    display_name = _tg_display_name(detail)
+    username = str(detail.get("username") or "").strip()
+    profile_link = str(detail.get("profile_link") or f"tg://user?id={telegram_user_id}")
+    header = "\n".join(
+        [
+            "<b>📝 Отчет по изменениям профиля [TG]</b>",
+            f"👤 <b>{_escape_html(display_name)}</b>",
+            f"ID: <code>{telegram_user_id}</code>",
+            f"Username: <code>{_escape_html('@' + username if username else 'не указан')}</code>",
+            f"🔗 <a href='{_escape_html(profile_link)}'>{_escape_html(profile_link)}</a>",
+            f"Тип изменений: <b>{_escape_html(change_label)}</b>",
+            f"Период: <b>{_escape_html(_format_period_label(days))}</b>",
+        ]
+    )
+
+    if not changes:
+        empty_text = f"{header}\n\n🔍 Изменения за выбранный период не найдены."
+        if change_key == "gifts":
+            if detail.get("gifts_supported") is True:
+                empty_text += (
+                    "\nℹ️ Сейчас клиентский слой дает только счетчик подарков. "
+                    "Если количество изменится, бот зафиксирует это как изменение."
+                )
+            else:
+                empty_text += (
+                    "\nℹ️ Текущий клиентский слой не дает надежной истории подарков чужого профиля. "
+                    "Бот не симулирует эти данные."
+                )
+        await message.answer(
+            empty_text,
+            reply_markup=tg_profile_change_result_keyboard(telegram_user_id, change_key, source),
+            disable_web_page_preview=True,
+        )
+        return
+
+    blocks = [header]
+    for change in changes:
+        blocks.append(_build_tg_profile_change_block(change))
+
+    await _send_long_html(message, blocks)
+    await message.answer(
+        "📝 Что дальше?",
+        reply_markup=tg_profile_change_result_keyboard(telegram_user_id, change_key, source),
+    )
 
 
 async def _show_tracked_users_screen(message: Message) -> None:
@@ -2034,7 +2296,13 @@ async def cb_tg_notify_toggle(callback: CallbackQuery, callback_data: TgNotifyTo
     if callback.message is None:
         return
 
-    if callback_data.key != "activity":
+    if callback_data.key == "activity":
+        enabled = await db.toggle_tg_activity_notification(callback.message.chat.id)
+        label = TG_NOTIFICATION_TOGGLE_LABELS["activity"]
+    elif callback_data.key in TG_CHANGE_NOTIFICATION_LABELS:
+        enabled = await db.toggle_tg_change_notification(callback.message.chat.id, callback_data.key)
+        label = TG_CHANGE_NOTIFICATION_LABELS[callback_data.key]
+    else:
         await _show_tg_notification_settings(
             callback.message,
             text="⚠️ Неизвестная TG-настройка уведомлений.",
@@ -2042,13 +2310,38 @@ async def cb_tg_notify_toggle(callback: CallbackQuery, callback_data: TgNotifyTo
         )
         return
 
-    enabled = await db.toggle_tg_activity_notification(callback.message.chat.id)
-    label = TG_NOTIFICATION_TOGGLE_LABELS["activity"]
     status_text = "включены" if enabled else "отключены"
     await _show_tg_notification_settings(
         callback.message,
         text=f"🔔 Уведомления по категории <b>{_escape_html(label)}</b> {status_text}.",
         back_target="notification_hub",
+    )
+
+
+@router.callback_query(TgProfileChangeTypeCallback.filter())
+async def cb_tg_profile_change_type(callback: CallbackQuery, callback_data: TgProfileChangeTypeCallback) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    await _show_tg_profile_change_period_picker(
+        callback.message,
+        callback_data.tg_id,
+        callback_data.key,
+        callback_data.src,
+    )
+
+
+@router.callback_query(TgProfileChangePeriodCallback.filter())
+async def cb_tg_profile_change_period(callback: CallbackQuery, callback_data: TgProfileChangePeriodCallback) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    await _show_tg_profile_change_report(
+        callback.message,
+        callback_data.tg_id,
+        callback_data.key,
+        callback_data.days,
+        callback_data.src,
     )
 
 
@@ -2167,11 +2460,7 @@ async def cb_tg_user_action(callback: CallbackQuery, callback_data: TgUserAction
         return
 
     if callback_data.action == "profile_changes":
-        await _show_tg_placeholder(
-            callback.message,
-            "📝 <b>Изменения профиля [TG]</b>\nРаздел Telegram подготовлен. Логика этого блока будет добавлена следующим этапом.",
-            back_target="tg_list",
-        )
+        await _show_tg_profile_change_type_picker(callback.message, callback_data.tg_id, callback_data.src)
         return
 
     await _show_tg_tracked_users_screen(callback.message)

@@ -22,6 +22,8 @@ from ui_callbacks import (
     ProfileChangeUserCallback,
     TgDeleteConfirmCallback,
     TgNotifyModeCallback,
+    TgProfileChangePeriodCallback,
+    TgProfileChangeTypeCallback,
     TgNotifyToggleCallback,
     TgPeriodSelectCallback,
     TgUserActionCallback,
@@ -76,6 +78,15 @@ CHANGE_NOTIFICATION_OPTIONS: list[tuple[str, str]] = [
 
 TG_NOTIFICATION_TOGGLE_OPTIONS: list[tuple[str, str]] = [
     ("activity", "Активность / last seen [TG]"),
+]
+
+TG_CHANGE_NOTIFICATION_OPTIONS: list[tuple[str, str]] = [
+    ("first_name", "Имя [TG]"),
+    ("last_name", "Фамилия [TG]"),
+    ("username", "Username [TG]"),
+    ("avatar", "Аватарка [TG]"),
+    ("gifts", "Подарки [TG]"),
+    ("bio", "Bio [TG]"),
 ]
 
 
@@ -651,6 +662,7 @@ def tg_report_result_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
 def tg_notification_settings_keyboard(
     current_mode: str,
     activity_enabled: bool,
+    change_settings: dict[str, bool],
     back_target: str = "notification_hub",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -670,9 +682,85 @@ def tg_notification_settings_keyboard(
             callback_data=TgNotifyToggleCallback(key=key).pack(),
         )
     builder.adjust(1)
+    for key, label in TG_CHANGE_NOTIFICATION_OPTIONS:
+        enabled = bool(change_settings.get(key, True))
+        status = "ВКЛ" if enabled else "ВЫКЛ"
+        icon = "✅" if enabled else "🚫"
+        builder.button(
+            text=f"{icon} {label}: {status}",
+            callback_data=TgNotifyToggleCallback(key=key).pack(),
+        )
+    builder.adjust(1)
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target=back_target).pack()),
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_profile_change_type_keyboard(
+    tg_id: int,
+    items: list[tuple[str, str]],
+    source: str,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for label, key in items:
+        builder.button(
+            text=label,
+            callback_data=TgProfileChangeTypeCallback(tg_id=tg_id, key=key, src=source).pack(),
+        )
+    builder.adjust(2)
+    builder.row(
+        *[
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+            ),
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_profile_change_period_keyboard(tg_id: int, change_key: str, source: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for label, days in PERIOD_OPTIONS:
+        builder.button(
+            text=label,
+            callback_data=TgProfileChangePeriodCallback(tg_id=tg_id, key=change_key, days=days, src=source).pack(),
+        )
+    builder.adjust(2)
+    builder.row(
+        *[
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=TgUserActionCallback(action="profile_changes", tg_id=tg_id, src=source).pack(),
+            ),
+            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_profile_change_result_keyboard(tg_id: int, change_key: str, source: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="⬅️ Назад к периоду [TG]",
+        callback_data=TgProfileChangeTypeCallback(tg_id=tg_id, key=change_key, src=source).pack(),
+    )
+    builder.button(
+        text="🧩 Другой тип [TG]",
+        callback_data=TgUserActionCallback(action="profile_changes", tg_id=tg_id, src=source).pack(),
+    )
+    builder.adjust(1)
+    builder.row(
+        *[
+            InlineKeyboardButton(
+                text="👤 Карточка пользователя [TG]",
+                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+            ),
             InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
         ]
     )
