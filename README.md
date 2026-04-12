@@ -1,154 +1,104 @@
-# VK Online Tracker Bot
+# 🕵️‍♂️ Sledim Bot — Универсальный мониторинг VK & Telegram
 
-Telegram-бот для отслеживания онлайн-статуса пользователей ВКонтакте.  
-Бот опрашивает VK API каждые 30 секунд и отправляет уведомления, когда отслеживаемый пользователь входит в сеть или выходит из неё.
-
----
-
-## Структура проекта
-
-```
-vk_tracker_bot/
-├── bot.py           # Точка входа: запускает бота и фоновый трекер
-├── config.py        # Конфигурация из .env
-├── db.py            # Работа с SQLite (aiosqlite)
-├── vk_api.py        # Запросы к VK API
-├── tracker.py       # Фоновая задача проверки статусов
-├── handlers.py      # Обработчики команд Telegram
-├── requirements.txt # Python-зависимости
-├── .env.example     # Шаблон переменных окружения
-└── README.md        # Эта документация
-```
+Многофункциональный Telegram-бот для автоматического отслеживания онлайн-статуса и изменений профилей пользователей в **ВКонтакте [VK]** и **Telegram [TG]**.
 
 ---
 
-## Быстрый старт
+## 🚀 Основные возможности
 
-### 1. Клонирование и установка зависимостей
+### 🟦 ВКонтакте [VK]
+*   **Трекинг онлайна**: Мониторинг статуса (онлайн/офлайн) с точностью до 30-60 секунд.
+*   **Контроль профиля**: Уведомления о смене имени, фамилии, аватара, статуса, домена, а также об изменениях в списках друзей и подписчиков.
+*   **Онлайн-сессии**: Запись времени входа и выхода для последующего анализа.
 
-```bash
-git clone <url-репозитория>
-cd vk_tracker_bot
-
-# Создаём и активируем виртуальное окружение
-python3 -m venv venv
-source venv/bin/activate        # Linux / macOS
-# venv\Scripts\activate.bat    # Windows
-
-# Устанавливаем зависимости
-pip install -r requirements.txt
-```
-
-### 2. Получение токенов
-
-#### Telegram Bot Token
-1. Откройте [@BotFather](https://t.me/BotFather) в Telegram
-2. Отправьте `/newbot` и следуйте инструкциям
-3. Скопируйте выданный токен
-
-#### VK Access Token
-Для получения **online-статуса** нужен токен пользователя (не сервисный ключ).
-
-**Способ через vkhost.github.io (быстрый):**
-1. Откройте [https://vkhost.github.io/](https://vkhost.github.io/)
-2. Выберите **Kate Mobile** → нажмите **Получить**
-3. Авторизуйтесь в VK, скопируйте `access_token` из адресной строки
-
-**Способ через своё приложение:**
-1. Создайте приложение на [vk.com/apps?act=manage](https://vk.com/apps?act=manage) (тип: Standalone)
-2. Используйте Implicit Flow с правами `friends,offline`
-
-### 3. Настройка .env
-
-```bash
-cp .env.example .env
-```
-
-Откройте `.env` и заполните:
-
-```env
-TELEGRAM_BOT_TOKEN=ваш_telegram_токен
-VK_ACCESS_TOKEN=ваш_vk_токен
-VK_API_VERSION=5.131
-DB_PATH=bot_database.db
-CHECK_INTERVAL=30
-```
-
-### 4. Запуск
-
-```bash
-python bot.py
-```
-
-При первом запуске бот автоматически создаст файл `bot_database.db` с нужными таблицами.
+### 🟨 Telegram [TG]
+*   **Activity Monitoring**: Отслеживание `last seen` и текущей активности (даже если пользователь скрыл точное время, бот фиксирует моменты появления в сети через MTProto).
+*   **Трекинг изменений**: Уведомления о смене имени, юзернейма, Bio, аватара и количества подарков.
 
 ---
 
-## Команды бота
+## ⌨️ Команды и интерфейс
+
+Бот управляется через **главное меню (кнопки)** и резервные команды:
 
 | Команда | Описание |
 |---------|----------|
-| `/start` | Приветствие и краткое описание |
-| `/help` | Список всех команд и подсказки |
-| `/add ID` | Добавить VK пользователя в список слежки |
-| `/remove ID` | Убрать VK пользователя из списка |
-| `/list` | Показать всех отслеживаемых с текущими статусами |
-| `/status ID` | Узнать текущий статус конкретного пользователя |
-| `/stop` | Приостановить уведомления |
-| `/resume` | Возобновить уведомления |
+| `/start` | 🏠 Открыть главное меню и сбросить состояние |
+| `/help` | ❓ Подробная справка по функциям и режимам |
+| `/add [ссылка]` | ➕ Добавить пользователя вручную (VK или TG) |
+| `/status [ссылка]`| 👤 Показать карточку конкретного пользователя |
+| `/find [имя]` | 🔎 Быстрый поиск по списку отслеживаемых |
+| `/remove [ссылка]`| 🗑️ Удалить пользователя из любого списка |
+
+**Текстовые кнопки:**
+*   `ВКонтакте [VK]` / `Telegram [TG]` — переход в разделы управления по платформам.
+*   `📊 Общий отчет` — статистика по всем пользователям сразу.
+*   `🔔 Настройки уведомлений` — глобальное управление типами алертов.
 
 ---
 
-## Как узнать VK ID
+## ⚙️ Установка и запуск
 
-- Если у пользователя числовой адрес (`vk.com/id12345`) — это и есть ID
-- Если адрес красивый (`vk.com/durov`) — откройте любое фото пользователя, в URL будет `owner_id=XXXXX`
-- Используйте сервисы типа [vk.barkov.net](https://vk.barkov.net)
+### 1. Подготовка окружения
+```bash
+git clone <url-репозитория>
+cd sledim_bot
+python -m venv venv
+source venv/bin/activate  # venv\Scripts\activate для Windows
+pip install -r requirements.txt
+```
 
----
+### 2. Настройка переменных окружения (.env)
+Создайте файл `.env`:
+```env
+TELEGRAM_BOT_TOKEN=86751...         # Токен от @BotFather
+VK_ACCESS_TOKEN=vk1.a...            # Токен пользователя VK
 
-## Технологии
-
-- **Python 3.11+**
-- **aiogram 3.x** — асинхронный фреймворк для Telegram Bot API
-- **aiohttp** — HTTP-клиент для запросов к VK API
-- **aiosqlite** — асинхронная работа с SQLite
-- **python-dotenv** — загрузка переменных из `.env`
-
----
-
-## Ограничения VK API
-
-- Онлайн-статус возвращается только для пользователей, у которых в настройках приватности разрешён просмотр статуса
-- Пользователи с закрытым профилем могут не отображаться как онлайн, даже если они в сети
-- VK API имеет лимит: ~3 запроса в секунду. Бот отправляет один батч-запрос раз в 30 секунд, что укладывается в лимиты даже при большом числе отслеживаемых пользователей
+# Настройка Telegram Resolver (MTProto):
+TELEGRAM_USERBOT_API_ID=12345       # С my.telegram.org
+TELEGRAM_USERBOT_API_HASH=abcd...    # С my.telegram.org
+```
 
 ---
 
-## Запуск в фоне (Linux, systemd)
+## 🛡️ Ограничения
 
-Создайте файл `/etc/systemd/system/vk-tracker-bot.service`:
+*   **Приватность [VK]**: Бот не может видеть онлайн-статус пользователей, которые скрыли его настройками приватности "Кто видит, что я в сети" (если выбрано "Никто").
+*   **Скрытый онлайн [TG]**: Если пользователь скрыл `last seen` в Telegram, бот будет фиксировать активность только в моменты явных действий или через системные триггеры MTProto.
+*   **Лимиты**: Telegram Bot API ограничивает рассылку до 30 сообщений в секунду. Бот обходит это через воркер `outbox`, распределяющий нагрузку.
+*   **База данных**: Используется SQLite в режиме WAL, что позволяет читать данные во время записи без блокировок.
+
+---
+
+## 🖥️ Запуск в фоне (Linux Systemd)
+
+Для бесперебойной работы используйте службу `systemd`. Создайте файл `/etc/systemd/system/sledim-bot.service`:
 
 ```ini
 [Unit]
-Description=VK Tracker Telegram Bot
+Description=Sledim Monitoring Bot
 After=network.target
 
 [Service]
 Type=simple
 User=your_user
-WorkingDirectory=/path/to/vk_tracker_bot
-ExecStart=/path/to/vk_tracker_bot/venv/bin/python bot.py
-Restart=on-failure
-RestartSec=10
+WorkingDirectory=/path/to/sledim_bot
+ExecStart=/path/to/sledim_bot/venv/bin/python bot.py
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+Запуск службы:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable vk-tracker-bot
-sudo systemctl start vk-tracker-bot
-sudo systemctl status vk-tracker-bot
+sudo systemctl enable sledim-bot
+sudo systemctl start sledim-bot
 ```
+
+---
+
+## 🛠 Стек
+*   **Python 3.11+**, **Aiogram 3.x**, **Telethon**, **Aiosqlite**.
