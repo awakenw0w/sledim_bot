@@ -31,63 +31,61 @@ from ui_callbacks import (
     UserActionCallback,
 )
 
-BTN_PLATFORM_VK = "ВКонтакте [VK]"
-BTN_PLATFORM_TG = "Telegram [TG]"
-BTN_ADD_USER = "➕ Добавить пользователя [VK]"
-BTN_ADD_USER_TG = "➕ Добавить пользователя [TG]"
-BTN_TRACKED_LIST = "📋 Список отслеживаемых [VK]"
-BTN_TRACKED_LIST_TG = "📋 Список отслеживаемых [TG]"
-BTN_ONLINE_REPORT = "📈 Отчет по онлайну"
-BTN_GENERAL_REPORT = "📊 Общий отчет"
-BTN_GENERAL_REPORT_VK = "📊 Общий отчет [VK]"
-BTN_GENERAL_REPORT_TG = "📊 Общий отчет [TG]"
-BTN_SEARCH = "🔎 Поиск по имени"
-BTN_NOTIFY = "🔔 Настройки уведомлений"
-BTN_NOTIFY_VK = "🔔 Настройки уведомлений [VK]"
-BTN_NOTIFY_TG = "🔔 Настройки уведомлений [TG]"
+BTN_PLATFORM_VK = "ВКонтакте"
+BTN_PLATFORM_TG = "Telegram"
+BTN_ADD_USER = "➕ Добавить"
+BTN_ADD_USER_TG = "➕ Добавить"
+BTN_TRACKED_LIST = "👥 Список"
+BTN_TRACKED_LIST_TG = "👥 Список"
+BTN_ONLINE_REPORT = "📈 Онлайн"
+BTN_GENERAL_REPORT = "📊 Отчеты"
+BTN_GENERAL_REPORT_VK = "ВКонтакте"
+BTN_GENERAL_REPORT_TG = "Telegram"
+BTN_SEARCH = "🔎 Поиск"
+BTN_NOTIFY = "🔔 Уведомления"
+BTN_NOTIFY_VK = "ВКонтакте"
+BTN_NOTIFY_TG = "Telegram"
 BTN_PROFILE_CHANGES = "📝 Изменения профиля"
-BTN_HELP = "❓ Помощь"
-BTN_TG_PICK_USER = "👤 Выбрать пользователя [TG]"
+BTN_HELP = "Помощь"
+BTN_TG_PICK_USER = "👤 Выбрать в Telegram"
 BTN_BACK = "⬅️ Назад"
-BTN_MAIN_MENU = "🏠 В главное меню"
+BTN_MAIN_MENU = "🏠 Главное меню"
 
 PERIOD_OPTIONS: list[tuple[str, int]] = [
-    ("🗓️ 1 день", 1),
-    ("🗓️ 7 дней", 7),
-    ("🗓️ 30 дней", 30),
-    ("🗂️ Все время", 0),
+    ("1 день", 1),
+    ("7 дней", 7),
+    ("30 дней", 30),
+    ("Все время", 0),
 ]
 
 NOTIFICATION_OPTIONS: list[tuple[str, str]] = [
-    ("🟢 Только вход в онлайн", "online"),
-    ("🔴 Только выход из онлайна", "offline"),
+    ("🟢 Только вход", "online"),
+    ("🔴 Только выход", "offline"),
     ("🔄 Вход и выход", "all"),
-    ("🔕 Выключить уведомления", "off"),
+    ("🔕 Выключить", "off"),
 ]
 
 CHANGE_NOTIFICATION_OPTIONS: list[tuple[str, str]] = [
     ("name", "Имя и фамилия"),
-    ("avatar", "Аватарка"),
-    ("status", "Статус профиля"),
-    ("link", "Ссылка на профиль"),
-    ("privacy", "Открыт / закрыт профиль"),
-    ("fields", "Поля профиля"),
+    ("avatar", "Аватар"),
+    ("status", "Статус"),
+    ("link", "Ссылка"),
+    ("privacy", "Приватность"),
+    ("fields", "Данные профиля"),
     ("posts", "Посты"),
     ("counts", "Счетчики"),
-    ("relations", "Друзья / подписчики / подписки"),
+    ("relations", "Друзья и подписки"),
 ]
 
-TG_NOTIFICATION_TOGGLE_OPTIONS: list[tuple[str, str]] = [
-    ("activity", "Активность / last seen [TG]"),
-]
+TG_NOTIFICATION_TOGGLE_OPTIONS: list[tuple[str, str]] = [("activity", "Последняя активность")]
 
 TG_CHANGE_NOTIFICATION_OPTIONS: list[tuple[str, str]] = [
-    ("first_name", "Имя [TG]"),
-    ("last_name", "Фамилия [TG]"),
-    ("username", "Username [TG]"),
-    ("avatar", "Аватарка [TG]"),
-    ("gifts", "Подарки [TG]"),
-    ("bio", "Bio [TG]"),
+    ("first_name", "Имя"),
+    ("last_name", "Фамилия"),
+    ("username", "Ник"),
+    ("avatar", "Аватар"),
+    ("gifts", "Подарки"),
+    ("bio", "О себе"),
 ]
 
 
@@ -100,7 +98,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="👇 Выберите раздел",
+        input_field_placeholder="Выберите раздел",
     )
 
 
@@ -128,7 +126,7 @@ def _list_back_nav_target(source: str) -> str:
 def back_main_inline_keyboard(back_target: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data=NavCallback(target=back_target).pack())
-    builder.button(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack())
+    builder.button(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack())
     builder.adjust(2)
     return builder.as_markup()
 
@@ -149,7 +147,7 @@ def platform_section_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="main").pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -163,7 +161,7 @@ def reports_hub_keyboard() -> InlineKeyboardMarkup:
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="main").pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -177,7 +175,7 @@ def notifications_hub_keyboard() -> InlineKeyboardMarkup:
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="main").pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -201,7 +199,7 @@ def tg_add_user_reply_keyboard() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=False,
-        input_field_placeholder="Введите username, @username, t.me/... или ID",
+        input_field_placeholder="Введите @username, ссылку или ID",
     )
 
 
@@ -212,15 +210,15 @@ def _add_pagination_row(builder: InlineKeyboardBuilder, page: int, total_pages: 
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton(
-            text="⬅️ Пред.", 
+            text="⬅️", 
             callback_data=PageCallback(page=page - 1, source=source).pack()
         ))
-    
-    nav_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
+
+    nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="noop"))
     
     if page < total_pages:
         nav_row.append(InlineKeyboardButton(
-            text="След. ➡️", 
+            text="➡️", 
             callback_data=PageCallback(page=page + 1, source=source).pack()
         ))
     
@@ -242,7 +240,7 @@ def tracked_list_paginated_keyboard(
                     callback_data=UserActionCallback(action="card", vk_id=vk_id, src=source).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="📊",
+                    text="📊 Отчет",
                     callback_data=UserActionCallback(action="report", vk_id=vk_id, src=source).pack(),
                 ),
                 InlineKeyboardButton(
@@ -261,7 +259,7 @@ def tracked_list_paginated_keyboard(
                 callback_data=NavCallback(target=_list_back_nav_target(source)).pack(),
             ),
             InlineKeyboardButton(
-                text="🏠 В главное меню",
+                text=BTN_MAIN_MENU,
                 callback_data=NavCallback(target="main").pack(),
             ),
         ]
@@ -285,7 +283,7 @@ def user_picker_keyboard(vk_items: list[tuple[int, str]], source: str, back_targ
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target=back_target).pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -314,7 +312,7 @@ def report_period_keyboard(scope: str, vk_id: int, source: str, back_target: str
     builder.row(
         *[
             back_button,
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -335,7 +333,7 @@ def user_card_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target=back_target).pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -344,11 +342,11 @@ def user_card_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
 def user_report_menu_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="📝 Изменения профиля",
+        text="📝 Изменения",
         callback_data=UserActionCallback(action="profile_changes", vk_id=vk_id, src=source).pack(),
     )
     builder.button(
-        text="📈 Отчет по онлайну",
+        text="📈 Онлайн",
         callback_data=UserActionCallback(action="online_report", vk_id=vk_id, src=source).pack(),
     )
     builder.adjust(1)
@@ -368,7 +366,7 @@ def user_report_menu_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
     builder.row(
         *[
             back_button,
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -377,11 +375,11 @@ def user_report_menu_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
 def delete_confirm_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="✅ Да, удалить",
+        text="Да, удалить",
         callback_data=DeleteConfirmCallback(vk_id=vk_id, confirm=1, src=source).pack(),
     )
     builder.button(
-        text="❌ Нет, отмена",
+        text="Отмена",
         callback_data=DeleteConfirmCallback(vk_id=vk_id, confirm=0, src=source).pack(),
     )
     builder.adjust(2)
@@ -395,7 +393,7 @@ def report_result_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
         callback_data=UserActionCallback(action="period", vk_id=vk_id, src=source).pack(),
     )
     builder.button(
-        text="👤 Карточка пользователя",
+        text="👤 Карточка",
         callback_data=UserActionCallback(
             action="card",
             vk_id=vk_id,
@@ -421,7 +419,7 @@ def report_result_keyboard(vk_id: int, source: str) -> InlineKeyboardMarkup:
     builder.row(
         *[
             back_button,
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -433,8 +431,8 @@ def general_report_result_keyboard() -> InlineKeyboardMarkup:
 
 def general_report_result_keyboard_with_target(back_target: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="🗓️ Выбрать другой период", callback_data=NavCallback(target=back_target).pack())
-    builder.button(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack())
+    builder.button(text="Другой период", callback_data=NavCallback(target=back_target).pack())
+    builder.button(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack())
     builder.adjust(1)
     return builder.as_markup()
 
@@ -464,7 +462,7 @@ def notification_settings_keyboard(
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target=back_target).pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -481,7 +479,7 @@ def profile_change_user_keyboard(vk_items: list[tuple[int, str]], source: str) -
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="main").pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -495,20 +493,15 @@ def profile_change_type_keyboard(vk_id: int, items: list[tuple[str, str]], sourc
             callback_data=ProfileChangeTypeCallback(vk_id=vk_id, key=key, src=source).pack(),
         )
     builder.adjust(2)
-    if source.startswith("r"):
-        back_button = InlineKeyboardButton(
-            text="⬅️ Назад",
-            callback_data=UserActionCallback(action="report", vk_id=vk_id, src=source[1:]).pack(),
-        )
-    else:
-        back_button = InlineKeyboardButton(
-            text="⬅️ Назад",
-            callback_data=NavCallback(target="profile_changes").pack(),
-        )
+    back_source = source[1:] if source.startswith("r") else source
+    back_button = InlineKeyboardButton(
+        text="⬅️ Назад",
+        callback_data=UserActionCallback(action="report", vk_id=vk_id, src=back_source).pack(),
+    )
     builder.row(
         *[
             back_button,
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -528,7 +521,7 @@ def profile_change_period_keyboard(vk_id: int, change_key: str, source: str) -> 
                 text="⬅️ Назад",
                 callback_data=ProfileChangeUserCallback(vk_id=vk_id, src=source).pack(),
             ),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -537,28 +530,28 @@ def profile_change_period_keyboard(vk_id: int, change_key: str, source: str) -> 
 def profile_change_result_keyboard(vk_id: int, change_key: str, source: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="🗓️ Другой период",
+        text="Другой период",
         callback_data=ProfileChangeTypeCallback(vk_id=vk_id, key=change_key, src=source).pack(),
     )
     builder.button(
-        text="🧩 Другой тип",
+        text="Другой тип",
         callback_data=ProfileChangeUserCallback(vk_id=vk_id, src=source).pack(),
     )
     builder.adjust(2)
     if source.startswith("r"):
         back_button = InlineKeyboardButton(
-            text="📊 К отчетам пользователя",
+            text="К отчетам",
             callback_data=UserActionCallback(action="report", vk_id=vk_id, src=source[1:]).pack(),
         )
     else:
         back_button = InlineKeyboardButton(
-            text="👥 Другой пользователь",
-            callback_data=NavCallback(target="profile_changes").pack(),
+            text="К отчетам",
+            callback_data=UserActionCallback(action="report", vk_id=vk_id, src=source).pack(),
         )
     builder.row(
         *[
             back_button,
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -573,13 +566,16 @@ def tg_tracked_list_paginated_keyboard(
     builder = InlineKeyboardBuilder()
     for item in items:
         tg_id = int(item["telegram_user_id"])
-        display_name = str(item.get("display_name") or f"ID {tg_id}")
-        # В пагинированном списке отводим 1 ряд на пользователя
+        display_name = str(item.get("button_label") or item.get("display_name") or f"ID {tg_id}")
         builder.row(
             *[
                 InlineKeyboardButton(
-                    text=f"👤 {display_name[:25]} [TG]",
+                    text=f"👤 {display_name[:25]}",
                     callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="📊 Отчет",
+                    callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source).pack(),
                 ),
                 InlineKeyboardButton(
                     text="🗑️",
@@ -593,7 +589,7 @@ def tg_tracked_list_paginated_keyboard(
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="tg_menu").pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -607,26 +603,51 @@ def tg_tracked_list_chunk_keyboard(items: list[dict], source: str = "tg_list") -
 def tg_user_card_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="👤 Профиль [TG]",
-        callback_data=TgUserActionCallback(action="profile", tg_id=tg_id, src=source).pack(),
+        text="📊 Отчет",
+        callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source).pack(),
     )
     builder.button(
-        text="📈 Отчет по онлайну [TG]",
-        callback_data=TgUserActionCallback(action="online_report", tg_id=tg_id, src=source).pack(),
-    )
-    builder.button(
-        text="📝 Изменения профиля [TG]",
-        callback_data=TgUserActionCallback(action="profile_changes", tg_id=tg_id, src=source).pack(),
-    )
-    builder.button(
-        text="🗑️ Удалить [TG]",
+        text="🗑️ Удалить",
         callback_data=TgUserActionCallback(action="delete", tg_id=tg_id, src=source).pack(),
     )
-    builder.adjust(1)
+    builder.adjust(2)
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target="tg_list").pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
+        ]
+    )
+    return builder.as_markup()
+
+
+def tg_user_report_menu_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="📈 Онлайн",
+        callback_data=TgUserActionCallback(action="online_report", tg_id=tg_id, src=source).pack(),
+    )
+    builder.button(
+        text="📝 Изменения",
+        callback_data=TgUserActionCallback(action="profile_changes", tg_id=tg_id, src=source).pack(),
+    )
+    builder.adjust(1)
+
+    base_source = _strip_report_source(source)
+    if base_source.startswith("c"):
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=base_source).pack(),
+        )
+    else:
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=NavCallback(target="tg_list").pack(),
+        )
+
+    builder.row(
+        *[
+            back_button,
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -635,11 +656,11 @@ def tg_user_card_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
 def tg_delete_confirm_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="✅ Да, удалить [TG]",
+        text="Да, удалить",
         callback_data=TgDeleteConfirmCallback(tg_id=tg_id, confirm=1, src=source).pack(),
     )
     builder.button(
-        text="❌ Нет, отмена",
+        text="Отмена",
         callback_data=TgDeleteConfirmCallback(tg_id=tg_id, confirm=0, src=source).pack(),
     )
     builder.adjust(1)
@@ -662,7 +683,12 @@ def tg_report_period_keyboard(
         )
     builder.adjust(2)
 
-    if back_to_card:
+    if source.startswith("r"):
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source[1:]).pack(),
+        )
+    elif back_to_card or source.startswith("c"):
         back_button = InlineKeyboardButton(
             text="⬅️ Назад",
             callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
@@ -676,7 +702,7 @@ def tg_report_period_keyboard(
     builder.row(
         *[
             back_button,
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -685,21 +711,33 @@ def tg_report_period_keyboard(
 def tg_report_result_keyboard(tg_id: int, source: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="🗓️ Другой период [TG]",
+        text="Другой период",
         callback_data=TgUserActionCallback(action="online_report", tg_id=tg_id, src=source).pack(),
     )
     builder.button(
-        text="👤 Карточка пользователя [TG]",
+        text="👤 Карточка",
         callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
     )
     builder.adjust(1)
+    if source.startswith("r"):
+        back_button = InlineKeyboardButton(
+            text="К отчетам",
+            callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source[1:]).pack(),
+        )
+    elif source.startswith("c"):
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+        )
+    else:
+        back_button = InlineKeyboardButton(
+            text="К отчетам",
+            callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source).pack(),
+        )
     builder.row(
         *[
-            InlineKeyboardButton(
-                text="⬅️ Назад",
-                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
-            ),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            back_button,
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -715,7 +753,7 @@ def tg_notification_settings_keyboard(
     for label, mode in NOTIFICATION_OPTIONS:
         prefix = "• " if mode == current_mode else ""
         builder.button(
-            text=f"{prefix}{label} [TG]",
+            text=f"{prefix}{label}",
             callback_data=TgNotifyModeCallback(mode=mode).pack(),
         )
     builder.adjust(1)
@@ -740,7 +778,7 @@ def tg_notification_settings_keyboard(
     builder.row(
         *[
             InlineKeyboardButton(text="⬅️ Назад", callback_data=NavCallback(target=back_target).pack()),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -758,13 +796,25 @@ def tg_profile_change_type_keyboard(
             callback_data=TgProfileChangeTypeCallback(tg_id=tg_id, key=key, src=source).pack(),
         )
     builder.adjust(2)
+    if source.startswith("r"):
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source[1:]).pack(),
+        )
+    elif source.startswith("c"):
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+        )
+    else:
+        back_button = InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source).pack(),
+        )
     builder.row(
         *[
-            InlineKeyboardButton(
-                text="⬅️ Назад",
-                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
-            ),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            back_button,
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -784,7 +834,7 @@ def tg_profile_change_period_keyboard(tg_id: int, change_key: str, source: str) 
                 text="⬅️ Назад",
                 callback_data=TgUserActionCallback(action="profile_changes", tg_id=tg_id, src=source).pack(),
             ),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()
@@ -793,21 +843,33 @@ def tg_profile_change_period_keyboard(tg_id: int, change_key: str, source: str) 
 def tg_profile_change_result_keyboard(tg_id: int, change_key: str, source: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="⬅️ Назад к периоду [TG]",
+        text="К периоду",
         callback_data=TgProfileChangeTypeCallback(tg_id=tg_id, key=change_key, src=source).pack(),
     )
     builder.button(
-        text="🧩 Другой тип [TG]",
+        text="Другой тип",
         callback_data=TgUserActionCallback(action="profile_changes", tg_id=tg_id, src=source).pack(),
     )
     builder.adjust(1)
+    if source.startswith("r"):
+        back_button = InlineKeyboardButton(
+            text="К отчетам",
+            callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source[1:]).pack(),
+        )
+    elif source.startswith("c"):
+        back_button = InlineKeyboardButton(
+            text="👤 Карточка",
+            callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
+        )
+    else:
+        back_button = InlineKeyboardButton(
+            text="К отчетам",
+            callback_data=TgUserActionCallback(action="report", tg_id=tg_id, src=source).pack(),
+        )
     builder.row(
         *[
-            InlineKeyboardButton(
-                text="👤 Карточка пользователя [TG]",
-                callback_data=TgUserActionCallback(action="card", tg_id=tg_id, src=source).pack(),
-            ),
-            InlineKeyboardButton(text="🏠 В главное меню", callback_data=NavCallback(target="main").pack()),
+            back_button,
+            InlineKeyboardButton(text=BTN_MAIN_MENU, callback_data=NavCallback(target="main").pack()),
         ]
     )
     return builder.as_markup()

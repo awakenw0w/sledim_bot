@@ -759,7 +759,7 @@ async def _check_profile_and_notify(bot: Bot) -> None:
             return
 
         users_map: dict[int, dict] = {u["id"]: u for u in users_data if "id" in u}
-        now_ts = int(time.time())
+        now_ts = int(time_mod.time())
         
         cached_profiles = await db.get_multiple_profile_caches(vk_ids)
         profiles_to_save = {}
@@ -927,17 +927,17 @@ async def run_tracker(bot: Bot) -> None:
     )
     last_profile_check_at = 0.0
     while True:
-        loop_started_at = time.time()
+        loop_started_at = time_mod.time()
         try:
             await _check_online_and_notify(bot)
             if loop_started_at - last_profile_check_at >= PROFILE_CHECK_INTERVAL:
                 await _check_profile_and_notify(bot)
-                last_profile_check_at = time.time()
+                last_profile_check_at = time_mod.time()
         except asyncio.CancelledError:
             logger.info("Трекер остановлен.")
             break
         except Exception as exc:
             logger.exception("Ошибка в цикле трекера: %s", exc)
 
-        sleep_for = max(ONLINE_CHECK_INTERVAL - (time.time() - loop_started_at), 0)
+        sleep_for = max(ONLINE_CHECK_INTERVAL - (time_mod.time() - loop_started_at), 0)
         await asyncio.sleep(sleep_for)

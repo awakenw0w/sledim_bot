@@ -33,10 +33,8 @@ async def _show_vk_notification_settings(callback: CallbackQuery, text: str | No
     
     await callback.message.answer(
         text or (
-            "🔔 Настройки уведомлений ВКонтакте [VK]:\n"
-            "• 🟢🔴 входы/выходы из онлайна\n"
-            "• 📝 изменения полей профиля\n\n"
-            "👇 Нажмите на кнопку, чтобы изменить."
+            "<b>Уведомления • ВКонтакте</b>\n"
+            "Выберите, о чем сообщать."
         ),
         reply_markup=notification_settings_keyboard(current_mode, change_settings, back_target="notification_hub")
     )
@@ -50,11 +48,8 @@ async def _show_tg_notification_settings(callback: CallbackQuery, text: str | No
     
     await callback.message.answer(
         text or (
-            "🔔 Настройки уведомлений Telegram [TG]:\n"
-            "• 🟢🔴 входы/выходы из онлайна\n"
-            "• 🟡 activity / last seen\n"
-            "• 👤📝 изменения профиля (имя, аватар, bio)\n\n"
-            "👇 Нажмите на кнопку, чтобы изменить."
+            "<b>Уведомления • Telegram</b>\n"
+            "Выберите, о чем сообщать."
         ),
         reply_markup=tg_notification_settings_keyboard(
             current_mode, 
@@ -88,7 +83,7 @@ async def cb_vk_notify_mode(callback: CallbackQuery, callback_data: NotifyModeCa
     mode = await db.set_notification_mode(callback.message.chat.id, callback_data.mode)
     label = NOTIFICATION_MODE_LABELS.get(mode, mode)
     await callback.message.delete()
-    await _show_vk_notification_settings(callback, text=f"✅ Режим уведомлений VK изменен на: <b>{label}</b>")
+    await _show_vk_notification_settings(callback, text=f"✅ Режим обновлен: <b>{label}</b>")
     await callback.answer()
 
 
@@ -98,7 +93,7 @@ async def cb_vk_notify_toggle(callback: CallbackQuery, callback_data: NotifyTogg
     label = CHANGE_NOTIFICATION_LABELS.get(callback_data.key, callback_data.key)
     status = "включены" if enabled else "отключены"
     await callback.message.delete()
-    await _show_vk_notification_settings(callback, text=f"🔔 Уведомления VK по категории <b>{escape_html(label)}</b> {status}.")
+    await _show_vk_notification_settings(callback, text=f"✅ <b>{escape_html(label)}</b>: {status}.")
     await callback.answer()
 
 
@@ -107,7 +102,7 @@ async def cb_tg_notify_mode(callback: CallbackQuery, callback_data: TgNotifyMode
     mode = await db.set_tg_notification_mode(callback.message.chat.id, callback_data.mode)
     label = NOTIFICATION_MODE_LABELS.get(mode, mode)
     await callback.message.delete()
-    await _show_tg_notification_settings(callback, text=f"✅ Режим уведомлений TG изменен на: <b>{label}</b>")
+    await _show_tg_notification_settings(callback, text=f"✅ Режим обновлен: <b>{label}</b>")
     await callback.answer()
 
 
@@ -123,5 +118,5 @@ async def cb_tg_notify_toggle(callback: CallbackQuery, callback_data: TgNotifyTo
     
     status = "включены" if enabled else "отключены"
     await callback.message.delete()
-    await _show_tg_notification_settings(callback, text=f"🔔 Уведомления TG по категории <b>{escape_html(label)}</b> {status}.")
+    await _show_tg_notification_settings(callback, text=f"✅ <b>{escape_html(label)}</b>: {status}.")
     await callback.answer()

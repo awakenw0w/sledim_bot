@@ -92,10 +92,10 @@ async def _send_subscription_required(target: Message | CallbackQuery) -> None:
 @router.callback_query(F.data == CHECK_SUBSCRIPTION_CALLBACK)
 async def cb_check_subscription(callback: CallbackQuery) -> None:
     if await _has_required_subscription(callback.bot, callback.from_user.id):
-        await callback.message.answer("✅ Подписка подтверждена! Теперь вы можете пользоваться ботом.")
+        await callback.message.answer("✅ Готово. Теперь бот доступен.")
         await callback.message.delete()
     else:
-        await callback.answer("❌ Вы всё еще не подписаны на канал.", show_alert=True)
+        await callback.answer("Вы еще не подписаны на канал.", show_alert=True)
 
 
 @router.callback_query(F.data == "noop")

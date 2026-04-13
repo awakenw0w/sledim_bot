@@ -26,6 +26,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _await_background_task(task: asyncio.Task, name: str) -> None:
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.exception("Фоновая задача %s завершилась с ошибкой во время остановки: %s", name, exc)
+
 
 async def main() -> None:
     """Инициализация и запуск бота вместе с трекером."""
@@ -53,23 +61,17 @@ async def main() -> None:
     try:
         # Запускаем polling (бесконечный цикл получения обновлений от Telegram)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    except asyncio.CancelledError:
+        logger.info("Получен запрос на остановку polling, начинаю завершение фоновых задач.")
+        raise
     finally:
         # При остановке (Ctrl+C или другой сигнал) отменяем задачи трекеров и воркера
         tracker_task.cancel()
         telegram_monitor_task.cancel()
         outbox_task.cancel()
-        try:
-            await tracker_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await telegram_monitor_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await outbox_task
-        except asyncio.CancelledError:
-            pass
+        await _await_background_task(tracker_task, "tracker")
+        await _await_background_task(telegram_monitor_task, "telegram_monitor")
+        await _await_background_task(outbox_task, "outbox_worker")
         await close_telegram_resolver()
         await db.close_db()
         await bot.session.close()

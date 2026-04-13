@@ -41,28 +41,26 @@ def _build_help_text(current_mode: str, change_settings: dict[str, bool]) -> str
     disabled_changes_text = ", ".join(disabled_change_labels) if disabled_change_labels else "ничего не отключено"
 
     return (
-        "🧭 Бот работает с двумя платформами: ВКонтакте [VK] и Telegram [TG].\n"
-        "Интерфейс у разделов одинаковый по структуре, но данные и карточки пользователей разделены по платформам.\n\n"
-        "<b>Как пользоваться меню:</b>\n"
-        f"• <b>{BTN_PLATFORM_VK}</b> — открыть раздел ВКонтакте со своими действиями и отчетами\n"
-        f"• <b>{BTN_PLATFORM_TG}</b> — открыть раздел Telegram с зеркальным интерфейсом\n"
-        f"• <b>{BTN_GENERAL_REPORT}</b> — выбрать общий отчет верхнего уровня по платформе\n"
-        f"• <b>{BTN_NOTIFY}</b> — открыть верхний уровень настроек уведомлений по платформам\n"
-        f"• <b>{BTN_HELP}</b> — открыть эту справку\n\n"
-        "<b>Как открыть отчеты:</b>\n"
-        "• персональные отчеты VK и TG не смешиваются между собой\n\n"
-        "<b>Как работают уведомления:</b>\n"
-        f"• в разделе <b>{BTN_NOTIFY_VK}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна и изменениях профиля VK\n"
-        f"• в разделе <b>{BTN_NOTIFY_TG}</b> можно настроить уведомления о входе в онлайн, выходе из онлайна, activity / last seen и изменениях профиля Telegram\n\n"
-        "<b>⌨️ Резервные команды:</b>\n"
-        "/start — 🏠 открыть главное меню\n"
-        "/help — ❓ подробная справка\n"
-        "/add <code>ССЫЛКА</code> — ➕ добавить пользователя вручную\n"
-        "/status <code>ССЫЛКА</code> — 👤 показать карточку конкретного пользователя\n"
-        "/find <code>ИМЯ</code> — 🔎 поиск среди отслеживаемых\n\n"
-        f"🔔 Текущий режим VK онлайн-уведомлений: <b>{NOTIFICATION_MODE_LABELS.get(current_mode, current_mode)}</b>\n"
-        f"✅ Включены VK-уведомления по изменениям: <b>{escape_html(enabled_changes_text)}</b>\n"
-        f"🚫 Отключены VK-уведомления по изменениям: <b>{escape_html(disabled_changes_text)}</b>"
+        "<b>Помощь</b>\n"
+        "Бот помогает следить за активностью и изменениями профиля во ВКонтакте и Telegram.\n\n"
+        "<b>Как начать</b>\n"
+        f"• Откройте <b>{BTN_PLATFORM_VK}</b> или <b>{BTN_PLATFORM_TG}</b>\n"
+        "• Добавьте пользователя\n"
+        "• Откройте список и выберите нужного человека\n"
+        "• В карточке можно открыть отчет или удалить пользователя\n\n"
+        "<b>Отчеты и уведомления</b>\n"
+        f"• <b>{BTN_GENERAL_REPORT}</b> — общие отчеты по платформе\n"
+        f"• <b>{BTN_NOTIFY}</b> — настройки уведомлений\n"
+        "• Данные ВКонтакте и Telegram не смешиваются\n\n"
+        "<b>Команды</b>\n"
+        "/start — открыть главное меню\n"
+        "/help — показать помощь\n"
+        "/add <code>ссылка</code> — добавить пользователя VK\n"
+        "/status <code>ссылка</code> — открыть карточку VK\n"
+        "/find <code>имя</code> — поиск по VK\n\n"
+        f"Уведомления VK: <b>{NOTIFICATION_MODE_LABELS.get(current_mode, current_mode)}</b>\n"
+        f"Включено по изменениям: <b>{escape_html(enabled_changes_text)}</b>\n"
+        f"Выключено по изменениям: <b>{escape_html(disabled_changes_text)}</b>"
     )
 
 
@@ -70,8 +68,8 @@ async def _show_main_menu(message: Message, text: str | None = None) -> None:
     await message.answer(
         text
         or (
-            "🏠 Главное меню.\n"
-            "Сначала выберите платформу или общий раздел ниже."
+            "<b>Главное меню</b>\n"
+            "Выберите раздел."
         ),
         reply_markup=main_menu_keyboard(),
     )
@@ -79,16 +77,16 @@ async def _show_main_menu(message: Message, text: str | None = None) -> None:
 
 async def _show_vk_menu(message: Message) -> None:
     await message.answer(
-        "🟦 <b>Раздел ВКонтакте [VK]</b>\n"
-        "Все действия в этом меню относятся только к VK-данным и VK-отчетам.",
+        "<b>ВКонтакте</b>\n"
+        "Выберите действие.",
         reply_markup=platform_section_keyboard("vk"),
     )
 
 
 async def _show_tg_menu(message: Message) -> None:
     await message.answer(
-        "⬜ <b>Раздел Telegram [TG]</b>\n"
-        "Структура этого меню зеркальна VK-разделу. Здесь уже подключены базовые статусы, online-сессии, отчеты и уведомления без смешивания с VK.",
+        "<b>Telegram</b>\n"
+        "Выберите действие.",
         reply_markup=platform_section_keyboard("tg"),
     )
 
@@ -101,16 +99,16 @@ async def _show_help(message: Message) -> None:
 
 async def _show_reports_hub(message: Message) -> None:
     await message.answer(
-        "📊 <b>Общий отчет</b>\n"
-        "Выберите платформу. Персональные данные VK и TG здесь не смешиваются.",
+        "<b>Отчеты</b>\n"
+        "Выберите платформу.",
         reply_markup=reports_hub_keyboard(),
     )
 
 
 async def _show_notifications_hub(message: Message) -> None:
     await message.answer(
-        "🔔 <b>Настройки уведомлений</b>\n"
-        "Выберите платформу, для которой хотите открыть настройки.",
+        "<b>Уведомления</b>\n"
+        "Выберите платформу.",
         reply_markup=notifications_hub_keyboard(),
     )
 
@@ -120,7 +118,7 @@ async def _show_notifications_hub(message: Message) -> None:
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await _show_main_menu(message, text="👋 Добро пожаловать! Я бот для отслеживания онлайна и изменений профиля [VK] и [TG].")
+    await _show_main_menu(message, text="Привет! Я помогаю следить за активностью и изменениями профиля во ВКонтакте и Telegram.")
 
 
 @router.message(Command("help"))

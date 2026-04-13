@@ -10,8 +10,10 @@ from ui_keyboards import (
     user_picker_keyboard,
     report_period_keyboard,
     report_result_keyboard,
+    user_report_menu_keyboard,
     tg_report_period_keyboard,
     tg_report_result_keyboard,
+    tg_user_report_menu_keyboard,
     general_report_result_keyboard_with_target,
     main_menu_keyboard
 )
@@ -56,6 +58,9 @@ router = Router()
 
 # --- Common Helpers ---
 
+def _normalize_report_source(source: str) -> str:
+    return source if source.startswith("r") else f"r{source}"
+
 async def _send_long_html(message: Message, blocks: list[str]) -> None:
     if not blocks:
         return
@@ -79,19 +84,19 @@ async def _send_long_html(message: Message, blocks: list[str]) -> None:
 async def _show_vk_online_report_user_picker(callback: CallbackQuery) -> None:
     details = await db.get_tracked_users_details(callback.message.chat.id, active_only=True)
     if not details:
-        await callback.message.answer("📈 Список отслеживаемых [VK] пуст.", reply_markup=main_menu_keyboard())
+        await callback.message.answer("В списке пока нет пользователей.", reply_markup=main_menu_keyboard())
         return
 
     items = [(int(item["vk_id"]), f"{item.get('first_name', '')} {item.get('last_name', '')}".strip() or f"ID {item['vk_id']}") for item in details]
     await callback.message.answer(
-        "📈 Выберите пользователя для отчета по онлайну [VK].",
+        "<b>Онлайн • ВКонтакте</b>\nВыберите пользователя.",
         reply_markup=user_picker_keyboard(items, source="orp", back_target="vk_menu")
     )
 
 
 async def _show_vk_general_report_period_picker(callback: CallbackQuery) -> None:
     await callback.message.answer(
-        "📊 Выберите период для общего отчета [VK].",
+        "<b>Общий отчет • ВКонтакте</b>\nВыберите период.",
         reply_markup=report_period_keyboard(scope="all", vk_id=0, source="all", back_target="general_reports_hub")
     )
 
@@ -100,7 +105,7 @@ async def _show_vk_general_report_period_picker(callback: CallbackQuery) -> None
 
 async def _show_tg_general_report_period_picker(callback: CallbackQuery) -> None:
     await callback.message.answer(
-        "📊 <b>Общий отчет [TG]</b>\nВыберите период.",
+        "<b>Общий отчет • Telegram</b>\nВыберите период.",
         reply_markup=tg_report_period_keyboard(
             scope="all",
             tg_id=0,
@@ -115,36 +120,54 @@ async def _show_tg_general_report_period_picker(callback: CallbackQuery) -> None
 
 @router.callback_query(NavCallback.filter(F.target == "general_report_vk_period"))
 async def cb_nav_vk_gen_report_period(callback: CallbackQuery) -> None:
+    await callback.answer()
     await _show_vk_general_report_period_picker(callback)
     await callback.message.delete()
-    await callback.answer()
 
 
 @router.callback_query(NavCallback.filter(F.target == "tg_general_report"))
 async def cb_nav_tg_gen_report_period(callback: CallbackQuery) -> None:
+    await callback.answer()
     await _show_tg_general_report_period_picker(callback)
     await callback.message.delete()
-    await callback.answer()
 
 
 @router.callback_query(UserActionCallback.filter(F.action == "report"))
 async def cb_vk_report_menu(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
-    # Здесь можно добавить меню выбора (сессии vs изменения), 
-    # но пока по умолчанию ведем на выбор периода для онлайна
+    await callback.answer()
+    report_source = _normalize_report_source(callback_data.src)
     await callback.message.answer(
-        "🗓️ Выберите период для отчета по онлайну [VK].",
+        "<b>Отчеты • ВКонтакте</b>\nВыберите вариант.",
+        reply_markup=user_report_menu_keyboard(callback_data.vk_id, report_source),
+    )
+
+
+@router.callback_query(UserActionCallback.filter(F.action.in_({"online_report", "period"})))
+async def cb_vk_online_report_period(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
+    await callback.answer()
+    detail = await db.get_tracked_user_detail(callback.message.chat.id, callback_data.vk_id)
+    if not detail:
+        await callback.message.answer("Пользователь не найден.")
+        return
+
+    report_source = _normalize_report_source(callback_data.src)
+    name = f"{detail.get('first_name', '')} {detail.get('last_name', '')}".strip() or f"ID {callback_data.vk_id}"
+    await callback.message.answer(
+        f"<b>Онлайн • ВКонтакте</b>\n"
+        f"Пользователь: <b>{escape_html(name)}</b>\n"
+        "Выберите период.",
         reply_markup=report_period_keyboard(
             scope="user",
             vk_id=callback_data.vk_id,
-            source=callback_data.src,
+            source=report_source,
             back_target="vk_list"
         )
     )
-    await callback.answer()
 
 
 @router.callback_query(PeriodSelectCallback.filter())
 async def cb_vk_period_perform(callback: CallbackQuery, callback_data: PeriodSelectCallback) -> None:
+    await callback.answer()
     chat_id = callback.message.chat.id
     now_ts = int(datetime.now(tz=MSK).timestamp())
     since_ts = period_to_since_ts(callback_data.days)
@@ -153,7 +176,7 @@ async def cb_vk_period_perform(callback: CallbackQuery, callback_data: PeriodSel
         # Общий отчет
         details = await db.get_tracked_users_details(chat_id, active_only=True)
         if not details:
-             await callback.message.answer("Список пуст.")
+             await callback.message.answer("В списке пока нет пользователей.")
              return
         
         blocks = [format_vk_general_report_header(callback_data.days)]
@@ -172,7 +195,7 @@ async def cb_vk_period_perform(callback: CallbackQuery, callback_data: PeriodSel
             blocks.append(format_vk_general_report_user_block(snapshot, sessions, callback_data.days, now_ts))
         
         await _send_long_html(callback.message, blocks)
-        await callback.message.answer("📊 Отчет завершен.", reply_markup=general_report_result_keyboard_with_target("general_report_vk_period"))
+        await callback.message.answer("✅ Отчет готов.", reply_markup=general_report_result_keyboard_with_target("general_report_vk_period"))
 
     else:
         # Персональный отчет
@@ -192,32 +215,52 @@ async def cb_vk_period_perform(callback: CallbackQuery, callback_data: PeriodSel
             "added_at": detail.get("added_at"),
         }
         text = format_vk_period_report(snapshot, sessions, callback_data.days, now_ts)
-        # Если текст слишком длинный (много сессий), разбиваем? 
-        # format_vk_period_report возвращает единую строку.
-        # Для безопасности можно обернуть в long_html
         await _send_long_html(callback.message, [text])
-        await callback.message.answer("📊 Отчет завершен.", reply_markup=report_result_keyboard(callback_data.vk_id, callback_data.src))
+        await callback.message.answer("✅ Отчет готов.", reply_markup=report_result_keyboard(callback_data.vk_id, callback_data.src))
 
+@router.callback_query(TgUserActionCallback.filter(F.action == "report"))
+async def cb_tg_report_menu(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
     await callback.answer()
+    detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
+    if not detail:
+        await callback.message.answer("Пользователь не найден.")
+        return
+
+    report_source = _normalize_report_source(callback_data.src)
+    await callback.message.answer(
+        f"<b>Отчеты • Telegram</b>\n"
+        f"Пользователь: <b>{escape_html(build_tg_display_name(detail))}</b>\n"
+        "Выберите вариант.",
+        reply_markup=tg_user_report_menu_keyboard(callback_data.tg_id, report_source),
+    )
 
 
 @router.callback_query(TgUserActionCallback.filter(F.action == "online_report"))
 async def cb_tg_online_report_period(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
+    await callback.answer()
+    detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
+    if not detail:
+        await callback.message.answer("Пользователь не найден.")
+        return
+
+    report_source = _normalize_report_source(callback_data.src)
     await callback.message.answer(
-        "🗓️ Выберите период для отчета по онлайну [TG].",
+        f"<b>Онлайн • Telegram</b>\n"
+        f"Пользователь: <b>{escape_html(build_tg_display_name(detail))}</b>\n"
+        "Выберите период.",
         reply_markup=tg_report_period_keyboard(
             scope="one",
             tg_id=callback_data.tg_id,
-            source=callback_data.src,
+            source=report_source,
             back_target="tg_list",
-            back_to_card=True
+            back_to_card=False
         )
     )
-    await callback.answer()
 
 
 @router.callback_query(TgPeriodSelectCallback.filter())
 async def cb_tg_period_perform(callback: CallbackQuery, callback_data: TgPeriodSelectCallback) -> None:
+    await callback.answer()
     chat_id = callback.message.chat.id
     now_ts = int(datetime.now(tz=MSK).timestamp())
     since_ts = period_to_since_ts(callback_data.days)
@@ -226,7 +269,7 @@ async def cb_tg_period_perform(callback: CallbackQuery, callback_data: TgPeriodS
         # Общий отчет TG
         details = await db.get_tg_tracked_users_details(chat_id)
         if not details:
-            await callback.message.answer("Список TG пуст.")
+            await callback.message.answer("В списке пока нет пользователей.")
             return
 
         blocks = [format_tg_general_report_header(callback_data.days)]
@@ -235,61 +278,72 @@ async def cb_tg_period_perform(callback: CallbackQuery, callback_data: TgPeriodS
             blocks.append(format_tg_general_report_user_block(detail, sessions, callback_data.days, now_ts))
         
         await _send_long_html(callback.message, blocks)
-        await callback.message.answer("📊 Общий отчет [TG] завершен.", reply_markup=general_report_result_keyboard_with_target("tg_general_report"))
+        await callback.message.answer("✅ Отчет готов.", reply_markup=general_report_result_keyboard_with_target("tg_general_report"))
 
     else:
         # Персональный отчет TG
         detail = await db.get_tg_tracked_user_detail(chat_id, callback_data.tg_id)
         if not detail:
-            await callback.message.answer("TG пользователь не найден.")
+            await callback.message.answer("Пользователь не найден.")
             return
         
         sessions = await db.get_tg_online_sessions_for_period(chat_id, callback_data.tg_id, since_ts=since_ts)
         text = format_tg_period_report(detail, sessions, callback_data.days, now_ts)
         await _send_long_html(callback.message, [text])
-        await callback.message.answer("📊 Отчет [TG] завершен.", reply_markup=tg_report_result_keyboard(callback_data.tg_id, callback_data.src))
+        await callback.message.answer("✅ Отчет готов.", reply_markup=tg_report_result_keyboard(callback_data.tg_id, callback_data.src))
 
-    await callback.answer()
+    # callback уже подтвержден в начале
 
 
 # --- Profile Changes Reports VK ---
 
 @router.callback_query(UserActionCallback.filter(F.action == "profile_changes"))
 async def cb_vk_profile_changes_picker(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
+    await callback.answer()
     from ui_keyboards import profile_change_type_keyboard
     detail = await db.get_tracked_user_detail(callback.message.chat.id, callback_data.vk_id)
+    if detail is None:
+        await callback.message.answer("Пользователь не найден.")
+        return
+
     name = f"{detail.get('first_name', '')} {detail.get('last_name', '')}".strip() or f"ID {callback_data.vk_id}"
+    report_source = _normalize_report_source(callback_data.src)
     
     await callback.message.answer(
-        f"🧩 Выберите тип изменений для <b>{escape_html(name)}</b>.",
-        reply_markup=profile_change_type_keyboard(callback_data.vk_id, PROFILE_CHANGE_TYPE_ITEMS, callback_data.src),
+        f"<b>Изменения профиля • ВКонтакте</b>\n"
+        f"Пользователь: <b>{escape_html(name)}</b>\n"
+        "Выберите раздел.",
+        reply_markup=profile_change_type_keyboard(callback_data.vk_id, PROFILE_CHANGE_TYPE_ITEMS, report_source),
     )
-    await callback.answer()
 
 
 @router.callback_query(ProfileChangeUserCallback.filter())
 async def cb_vk_profile_change_user(callback: CallbackQuery, callback_data: ProfileChangeUserCallback) -> None:
+    await callback.answer()
     from ui_keyboards import profile_change_type_keyboard
     await callback.message.answer(
-        f"🧩 Выберите тип изменений.",
+        "<b>Изменения профиля • ВКонтакте</b>\n"
+        "Выберите раздел.",
         reply_markup=profile_change_type_keyboard(callback_data.vk_id, PROFILE_CHANGE_TYPE_ITEMS, callback_data.src),
     )
-    await callback.answer()
 
 
 @router.callback_query(ProfileChangeTypeCallback.filter())
 async def cb_vk_profile_change_type(callback: CallbackQuery, callback_data: ProfileChangeTypeCallback) -> None:
+    await callback.answer()
     from ui_keyboards import profile_change_period_keyboard
     meta = PROFILE_CHANGE_FILTERS.get(callback_data.key, PROFILE_CHANGE_FILTERS["all"])
     await callback.message.answer(
-        f"🗓️ Выберите период для отчета: <b>{escape_html(str(meta['label']))}</b>.",
+        f"<b>Изменения профиля • ВКонтакте</b>\n"
+        f"Раздел: <b>{escape_html(str(meta['label']))}</b>\n"
+        "Выберите период.",
         reply_markup=profile_change_period_keyboard(callback_data.vk_id, callback_data.key, callback_data.src),
     )
-    await callback.answer()
 
 
 @router.callback_query(ProfileChangePeriodCallback.filter())
 async def cb_vk_profile_change_perform(callback: CallbackQuery, callback_data: ProfileChangePeriodCallback) -> None:
+    await callback.answer()
     meta = PROFILE_CHANGE_FILTERS.get(callback_data.key, PROFILE_CHANGE_FILTERS["all"])
     change_label = str(meta["label"])
     
@@ -308,16 +362,16 @@ async def cb_vk_profile_change_perform(callback: CallbackQuery, callback_data: P
     name = f"{detail.get('first_name', '')} {detail.get('last_name', '')}".strip() or f"ID {callback_data.vk_id}"
     
     header = "\n".join([
-        "<b>📝 Отчет по изменениям профиля [VK]</b>",
+        "<b>Изменения профиля • ВКонтакте</b>",
         f"👤 <b>{escape_html(name)}</b>",
-        f"Тип: <b>{escape_html(change_label)}</b>",
+        f"Раздел: <b>{escape_html(change_label)}</b>",
         f"Период: <b>{escape_html(format_period_label(callback_data.days))}</b>",
     ])
 
     from ui_keyboards import profile_change_result_keyboard
     if not changes:
         await callback.message.answer(
-            f"{header}\n\n🔍 Изменения за выбранный период не найдены.",
+            f"{header}\n\nЗа этот период изменений не было.",
             reply_markup=profile_change_result_keyboard(callback_data.vk_id, callback_data.key, callback_data.src)
         )
     else:
@@ -325,39 +379,49 @@ async def cb_vk_profile_change_perform(callback: CallbackQuery, callback_data: P
         for c in changes:
             blocks.append(build_profile_change_block(c))
         await _send_long_html(callback.message, blocks)
-        await callback.message.answer("📝 Отчет завершен.", reply_markup=profile_change_result_keyboard(callback_data.vk_id, callback_data.key, callback_data.src))
+        await callback.message.answer("✅ Отчет готов.", reply_markup=profile_change_result_keyboard(callback_data.vk_id, callback_data.key, callback_data.src))
     
-    await callback.answer()
+    # callback уже подтвержден в начале
 
 
 # --- Profile Changes Reports TG ---
 
 @router.callback_query(TgUserActionCallback.filter(F.action == "profile_changes"))
 async def cb_tg_profile_changes_picker(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
+    await callback.answer()
     detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
+    if detail is None:
+        await callback.message.answer("Пользователь не найден.")
+        return
+
     name = build_tg_display_name(detail)
+    report_source = _normalize_report_source(callback_data.src)
     
     from ui_keyboards import tg_profile_change_type_keyboard
     await callback.message.answer(
-        f"🧩 Выберите тип изменений профиля [TG] для <b>{escape_html(name)}</b>.",
-        reply_markup=tg_profile_change_type_keyboard(callback_data.tg_id, TG_PROFILE_CHANGE_TYPE_ITEMS, callback_data.src),
+        f"<b>Изменения профиля • Telegram</b>\n"
+        f"Пользователь: <b>{escape_html(name)}</b>\n"
+        "Выберите раздел.",
+        reply_markup=tg_profile_change_type_keyboard(callback_data.tg_id, TG_PROFILE_CHANGE_TYPE_ITEMS, report_source),
     )
-    await callback.answer()
 
 
 @router.callback_query(TgProfileChangeTypeCallback.filter())
 async def cb_tg_profile_change_type(callback: CallbackQuery, callback_data: TgProfileChangeTypeCallback) -> None:
+    await callback.answer()
     from ui_keyboards import tg_profile_change_period_keyboard
     meta = TG_PROFILE_CHANGE_FILTERS.get(callback_data.key, TG_PROFILE_CHANGE_FILTERS["all"])
     await callback.message.answer(
-        f"🗓️ Выберите период для отчета [TG]: <b>{escape_html(str(meta['label']))}</b>.",
+        f"<b>Изменения профиля • Telegram</b>\n"
+        f"Раздел: <b>{escape_html(str(meta['label']))}</b>\n"
+        "Выберите период.",
         reply_markup=tg_profile_change_period_keyboard(callback_data.tg_id, callback_data.key, callback_data.src),
     )
-    await callback.answer()
 
 
 @router.callback_query(TgProfileChangePeriodCallback.filter())
 async def cb_tg_profile_change_perform(callback: CallbackQuery, callback_data: TgProfileChangePeriodCallback) -> None:
+    await callback.answer()
     meta = TG_PROFILE_CHANGE_FILTERS.get(callback_data.key, TG_PROFILE_CHANGE_FILTERS["all"])
     change_label = str(meta["label"])
     
@@ -376,16 +440,16 @@ async def cb_tg_profile_change_perform(callback: CallbackQuery, callback_data: T
     name = build_tg_display_name(detail)
     
     header = "\n".join([
-        "<b>📝 Отчет по изменениям профиля [TG]</b>",
+        "<b>Изменения профиля • Telegram</b>",
         f"👤 <b>{escape_html(name)}</b>",
-        f"Тип: <b>{escape_html(change_label)}</b>",
+        f"Раздел: <b>{escape_html(change_label)}</b>",
         f"Период: <b>{escape_html(format_period_label(callback_data.days))}</b>",
     ])
 
     from ui_keyboards import tg_profile_change_result_keyboard
     if not changes:
         await callback.message.answer(
-            f"{header}\n\n🔍 Изменения за выбранный период не найдены.",
+            f"{header}\n\nЗа этот период изменений не было.",
             reply_markup=tg_profile_change_result_keyboard(callback_data.tg_id, callback_data.key, callback_data.src)
         )
     else:
@@ -393,6 +457,6 @@ async def cb_tg_profile_change_perform(callback: CallbackQuery, callback_data: T
         for c in changes:
             blocks.append(build_tg_profile_change_block(c))
         await _send_long_html(callback.message, blocks)
-        await callback.message.answer("📝 Отчет завершен.", reply_markup=tg_profile_change_result_keyboard(callback_data.tg_id, callback_data.key, callback_data.src))
+        await callback.message.answer("✅ Отчет готов.", reply_markup=tg_profile_change_result_keyboard(callback_data.tg_id, callback_data.key, callback_data.src))
     
-    await callback.answer()
+    # callback уже подтвержден в начале

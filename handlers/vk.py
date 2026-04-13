@@ -41,30 +41,22 @@ def _normalize_name(value: str) -> str:
 
 
 async def _load_current_users_map(vk_ids: list[int]) -> dict[int, dict]:
-    if not vk_ids:
-        return {}
-    users_data = await vk_api.get_users_status(vk_ids)
-    if not users_data:
-        return {}
-    return {user["id"]: user for user in users_data if "id" in user}
+    return {}
 
 
-def _snapshot_from_detail(detail: dict, live_user: dict | None) -> dict:
+def _snapshot_from_detail(detail: dict) -> dict:
     vk_id = int(detail["vk_id"])
-    live_profile = vk_api.extract_profile_snapshot(live_user) if live_user else {}
-    online = int(live_user.get("online", 0) if live_user else detail.get("online", 0))
-    last_seen = vk_api.extract_last_seen_ts(live_user) if live_user else detail.get("last_seen")
-    
+    online = int(detail.get("online", 0) or 0)
+    last_seen = detail.get("last_seen")
+
     domain = detail.get("domain")
-    if "domain" in live_profile:
-        domain = live_profile["domain"]
     profile_link = vk_api.build_profile_link(vk_id, domain)
 
     snapshot = {
         "vk_id": vk_id,
         "name": build_vk_name(
-            live_profile.get("first_name") or detail.get("first_name", ""),
-            live_profile.get("last_name") or detail.get("last_name", ""),
+            detail.get("first_name", ""),
+            detail.get("last_name", ""),
             vk_id
         ),
         "online": online,
@@ -76,10 +68,7 @@ def _snapshot_from_detail(detail: dict, live_user: dict | None) -> dict:
     }
 
     for field_name in db.PROFILE_CACHE_FIELDS:
-        if field_name in live_profile:
-            snapshot[field_name] = live_profile.get(field_name)
-        else:
-            snapshot[field_name] = detail.get(field_name)
+        snapshot[field_name] = detail.get(field_name)
 
     return snapshot
 
@@ -89,8 +78,7 @@ async def _load_tracked_snapshots(chat_id: int) -> list[dict]:
     if not details:
         return []
 
-    live_map = await _load_current_users_map([int(item["vk_id"]) for item in details])
-    return [_snapshot_from_detail(detail, live_map.get(int(detail["vk_id"]))) for detail in details]
+    return [_snapshot_from_detail(detail) for detail in details]
 
 
 async def _get_single_snapshot(chat_id: int, vk_id: int) -> dict | None:
@@ -98,15 +86,15 @@ async def _get_single_snapshot(chat_id: int, vk_id: int) -> dict | None:
     if detail is None:
         return None
 
-    live_user = await vk_api.get_single_user_status(vk_id)
-    return _snapshot_from_detail(detail, live_user)
+    return _snapshot_from_detail(detail)
 
 
 async def _show_vk_list(message: Message, page: int = 1, source: str = "vk_list", title: str | None = None) -> None:
     snapshots = await _load_tracked_snapshots(message.chat.id)
     if not snapshots:
         await message.answer(
-            "📋 Список отслеживаемых пользователей [VK] пуст.",
+            "<b>Список • ВКонтакте</b>\n"
+            "Пока здесь пусто. Добавьте первого пользователя.",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -118,18 +106,18 @@ async def _show_vk_list(message: Message, page: int = 1, source: str = "vk_list"
     start_idx = (page - 1) * page_size
     chunk = snapshots[start_idx : start_idx + page_size]
     
-    title = title or "<b>📋 Список отслеживаемых пользователей [VK]</b>"
+    title = title or "<b>Список • ВКонтакте</b>"
     lines = [title]
     if total_pages > 1:
-        lines[0] += f" (стр. {page}/{total_pages})"
+        lines.append(f"Страница {page} из {total_pages}")
 
     for snapshot in chunk:
         status = "🟢 онлайн" if snapshot["online"] else "🔴 офлайн"
         lines.append(
             f"• <b>{escape_html(snapshot['name'])}</b>\n"
-            f"ID: <code>{snapshot['vk_id']}</code>\n"
             f"Статус: {status}\n"
-            f"🔗 <a href='{snapshot['profile_link']}'>{snapshot['profile_link']}</a>"
+            f"ID: <code>{snapshot['vk_id']}</code>\n"
+            f"Ссылка: <a href='{snapshot['profile_link']}'>{snapshot['profile_link']}</a>"
         )
 
     text = "\n\n".join(lines)
@@ -146,7 +134,7 @@ async def _show_vk_list(message: Message, page: int = 1, source: str = "vk_list"
 async def _show_user_card(message: Message, vk_id: int, source: str) -> None:
     snapshot = await _get_single_snapshot(message.chat.id, vk_id)
     if snapshot is None:
-        await message.answer("⚠️ Пользователь не найден в списке отслеживаемых.")
+        await message.answer("Пользователь не найден в вашем списке.")
         return
 
     privacy_lines = await build_relation_privacy_lines(vk_id)
@@ -164,7 +152,7 @@ async def _perform_add_vk_user(message: Message, user: dict) -> None:
 
     if user.get("deactivated"):
         reason = user.get("deactivated", "удалён")
-        await message.answer(f"Аккаунт <code>{vk_id}</code> {reason} и недоступен для отслеживания.")
+        await message.answer(f"Профиль <code>{vk_id}</code> недоступен: {reason}.")
         return
 
     added = await db.add_tracked_user(chat_id, vk_id)
@@ -189,12 +177,15 @@ async def _perform_add_vk_user(message: Message, user: dict) -> None:
 
     if added:
         await message.answer(
-            f"✅ Добавлен: <b>{name}</b>\nID: <code>{vk_id}</code>",
+            f"✅ Пользователь добавлен\n"
+            f"<b>{name}</b>\n"
+            f"ID: <code>{vk_id}</code>",
             reply_markup=main_menu_keyboard()
         )
     else:
         await message.answer(
-            f"ℹ️ Пользователь <b>{name}</b> уже отслеживается.",
+            f"ℹ️ Пользователь уже есть в списке\n"
+            f"<b>{name}</b>",
             reply_markup=main_menu_keyboard()
         )
 
@@ -203,16 +194,18 @@ async def _perform_add_vk_user(message: Message, user: dict) -> None:
 
 @router.callback_query(NavCallback.filter(F.target == "vk_list"))
 async def cb_vk_list(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
     await state.clear()
     await _show_vk_list(callback.message)
-    await callback.answer()
 
 
 @router.callback_query(NavCallback.filter(F.target == "vk_add"))
 async def cb_vk_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddUserStates.waiting_for_vk_link)
     await callback.message.answer(
-        "➕ Отправьте ID, короткое имя или ссылку на профиль ВКонтакте [VK].\n\n" + get_vk_link_formats_text(),
+        "<b>Добавление во ВКонтакте</b>\n"
+        "Отправьте ссылку, короткое имя или ID профиля.\n\n"
+        + get_vk_link_formats_text(),
         reply_markup=back_main_inline_keyboard("vk_menu")
     )
     await callback.answer()
@@ -220,41 +213,41 @@ async def cb_vk_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(PageCallback.filter(F.source == "vk_list"))
 async def cb_vk_list_pagination(callback: CallbackQuery, callback_data: PageCallback) -> None:
+    await callback.answer()
     # Удаляем старое сообщение или редактируем? Пользователь просил "не ломать UX".
     # Для лучшего UX при пагинации лучше редактировать текущее сообщение.
     await callback.message.delete()
     await _show_vk_list(callback.message, page=callback_data.page)
-    await callback.answer()
 
 
 @router.callback_query(UserActionCallback.filter(F.action == "card"))
 async def cb_vk_card(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
-    await _show_user_card(callback.message, callback_data.vk_id, callback_data.src)
     await callback.answer()
+    await _show_user_card(callback.message, callback_data.vk_id, callback_data.src)
 
 
 @router.callback_query(UserActionCallback.filter(F.action == "delete"))
 async def cb_vk_delete_confirm(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
+    await callback.answer()
     snapshot = await _get_single_snapshot(callback.message.chat.id, callback_data.vk_id)
     if snapshot:
         await callback.message.answer(
-            f"🗑️ Удалить пользователя <b>{snapshot['name']}</b> из отслеживания?",
+            f"Удалить <b>{snapshot['name']}</b> из списка?",
             reply_markup=delete_confirm_keyboard(callback_data.vk_id, callback_data.src)
         )
-    await callback.answer()
 
 
 @router.callback_query(DeleteConfirmCallback.filter())
 async def cb_vk_delete_perform(callback: CallbackQuery, callback_data: DeleteConfirmCallback) -> None:
+    await callback.answer()
     if callback_data.confirm:
         await db.remove_tracked_user(callback.message.chat.id, callback_data.vk_id)
-        await callback.message.answer("✅ Пользователь удален из списка отслеживаемых.")
+        await callback.message.answer("✅ Пользователь удален.")
         await callback.message.delete()
         # Возвращаемся в список
         await _show_vk_list(callback.message, source=callback_data.src)
     else:
         await callback.message.delete()
-    await callback.answer()
 
 
 @router.message(AddUserStates.waiting_for_vk_link)
@@ -262,7 +255,7 @@ async def process_vk_add_link(message: Message, state: FSMContext) -> None:
     raw_link = message.text.strip()
     user = await vk_api.resolve_user_by_vk_link(raw_link)
     if not user:
-        await message.answer("❌ Не удалось найти пользователя VK. Проверьте ссылку и попробуйте еще раз.")
+        await message.answer("Не удалось найти пользователя. Проверьте ссылку или ID.")
         return
 
     await state.clear()
@@ -280,7 +273,7 @@ async def cmd_add(message: Message, state: FSMContext) -> None:
     if user:
         await _perform_add_vk_user(message, user)
     else:
-        await message.answer("❌ Пользователь VK не найден.")
+        await message.answer("Пользователь не найден.")
 
 
 @router.message(Command("list"))
@@ -292,14 +285,14 @@ async def cmd_list(message: Message) -> None:
 async def cmd_status(message: Message, state: FSMContext) -> None:
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("⚠️ Используйте: `/status ССЫЛКА` или `/status ID`.")
+        await message.answer("Используйте: <code>/status ссылка</code> или <code>/status ID</code>.")
         return
     
     user = await vk_api.resolve_user_by_vk_link(parts[1])
     if user:
         await _show_user_card(message, int(user["id"]), source="cmd")
     else:
-        await message.answer("❌ Пользователь VK не найден.")
+        await message.answer("Пользователь не найден.")
 
 
 @router.message(Command("find"))
@@ -307,7 +300,7 @@ async def cmd_find(message: Message, state: FSMContext) -> None:
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
         await state.set_state(SearchStates.waiting_for_query)
-        await message.answer("🔎 Введите имя для поиска среди отслеживаемых.")
+        await message.answer("Введите имя для поиска.")
         return
     
     # Здесь логика поиска (упрощенно)
@@ -316,17 +309,17 @@ async def cmd_find(message: Message, state: FSMContext) -> None:
     matches = [s for s in snapshots if query in s["name"].lower()]
     
     if not matches:
-        await message.answer("🔍 Ничего не найдено.")
+        await message.answer("Ничего не найдено.")
     else:
         # Показываем список результатов (первая страница)
-        await _show_vk_list(message, page=1, source="search", title=f"🔎 Результаты поиска: {escape_html(parts[1])}")
+        await _show_vk_list(message, page=1, source="search", title=f"<b>Поиск • ВКонтакте</b>\nЗапрос: <code>{escape_html(parts[1])}</code>")
 
 
 @router.message(Command("remove"))
 async def cmd_remove(message: Message) -> None:
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("⚠️ Используйте: `/remove ССЫЛКА` или `/remove ID`.")
+        await message.answer("Используйте: <code>/remove ссылка</code> или <code>/remove ID</code>.")
         return
     
     user = await vk_api.resolve_user_by_vk_link(parts[1])
@@ -335,6 +328,6 @@ async def cmd_remove(message: Message) -> None:
         if removed:
             await message.answer(f"✅ Пользователь <code>{user['id']}</code> удален.")
         else:
-            await message.answer("❌ Пользователь не найден в вашем списке.")
+            await message.answer("Пользователь не найден в вашем списке.")
     else:
-        await message.answer("❌ Не удалось найти пользователя VK.")
+        await message.answer("Не удалось найти пользователя.")

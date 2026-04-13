@@ -31,6 +31,7 @@ from ui_states import AddUserStates
 from ui_format import (
     escape_html,
     format_tg_profile_card,
+    build_tg_button_label,
     build_tg_display_name,
     format_added_at,
     build_tg_status_label,
@@ -60,7 +61,8 @@ async def _show_tg_list(message: Message, page: int = 1, source: str = "tg_list"
     tg_users = await db.get_tg_tracked_users_details(message.chat.id)
     if not tg_users:
         await message.answer(
-            "📋 Список отслеживаемых пользователей [TG] пуст.\nДобавьте пользователя через кнопку «Добавить пользователя [TG]».",
+            "<b>Список • Telegram</b>\n"
+            "Пока здесь пусто. Добавьте первого пользователя.",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -72,7 +74,9 @@ async def _show_tg_list(message: Message, page: int = 1, source: str = "tg_list"
     start_idx = (page - 1) * page_size
     chunk = tg_users[start_idx : start_idx + page_size]
     
-    lines = [f"<b>📋 Список отслеживаемых пользователей [TG]</b> (стр. {page}/{total_pages})"]
+    lines = ["<b>Список • Telegram</b>"]
+    if total_pages > 1:
+        lines.append(f"Страница {page} из {total_pages}")
     for item in chunk:
         display_name = build_tg_display_name(item)
         username = str(item.get("username") or "").strip()
@@ -81,13 +85,13 @@ async def _show_tg_list(message: Message, page: int = 1, source: str = "tg_list"
             f"ID: <code>{item['telegram_user_id']}</code>",
         ]
         if username:
-            user_lines.append(f"Username: <code>@{escape_html(username)}</code>")
-        user_lines.append(f"Добавлен: {format_added_at(item.get('added_at'))}")
+            user_lines.append(f"Ник: <code>@{escape_html(username)}</code>")
+        user_lines.append(f"В списке с: {format_added_at(item.get('added_at'))}")
         lines.append("\n".join(user_lines))
 
     text = "\n\n".join(lines)
     keyboard = tg_tracked_list_paginated_keyboard(
-        chunk,
+        [{**item, "button_label": build_tg_button_label(item)} for item in chunk],
         page=page,
         total_pages=total_pages,
         source=source
@@ -142,10 +146,11 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
         source_value=source_value,
     )
     display_name = build_tg_display_name(tg_user)
-    username_line = f"\nUsername: <code>@{escape_html(username)}</code>" if username else ""
-    result_prefix = "Добавлен" if added else "Пользователь уже отслеживается, данные обновлены"
+    username_line = f"\nНик: <code>@{escape_html(username)}</code>" if username else ""
+    result_prefix = "Пользователь добавлен" if added else "Пользователь уже в списке, данные обновлены"
     await message.answer(
-        f"⬜ {result_prefix}: <b>{escape_html(display_name)}</b>\n"
+        f"✅ {result_prefix}\n"
+        f"<b>{escape_html(display_name)}</b>\n"
         f"ID: <code>{tg_user['telegram_user_id']}</code>{username_line}",
         reply_markup=main_menu_keyboard(),
     )
@@ -155,21 +160,23 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
 
 @router.callback_query(NavCallback.filter(F.target == "tg_list"))
 async def cb_tg_list(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
     await state.clear()
     await _show_tg_list(callback.message)
-    await callback.answer()
 
 
 @router.callback_query(NavCallback.filter(F.target == "tg_add"))
 async def cb_tg_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddUserStates.waiting_for_tg_link)
     await callback.message.answer(
-        "➕ Отправьте данные пользователя Telegram [TG], которого хотите добавить.\n\n"
-        "Можно отправить:\n"
+        "<b>Добавление в Telegram</b>\n"
+        "Отправьте ссылку, ник или ID пользователя.\n\n"
+        "Подойдут варианты:\n"
         "• <code>username</code>\n"
         "• <code>@username</code>\n"
         "• <code>t.me/username</code>\n"
-        "• числовой <code>user id</code>",
+        "• <code>123456789</code>\n\n"
+        "Или выберите пользователя кнопкой ниже.",
         reply_markup=tg_add_user_reply_keyboard(),
     )
     await callback.answer()
@@ -177,16 +184,17 @@ async def cb_tg_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(PageCallback.filter(F.source == "tg_list"))
 async def cb_tg_list_pagination(callback: CallbackQuery, callback_data: PageCallback) -> None:
+    await callback.answer()
     await callback.message.delete()
     await _show_tg_list(callback.message, page=callback_data.page)
-    await callback.answer()
 
 
 @router.callback_query(TgUserActionCallback.filter(F.action == "card"))
 async def cb_tg_card(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
+    await callback.answer()
     detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
     if detail is None:
-        await callback.message.answer("⚠️ Telegram-пользователь не найден в списке отслеживаемых.")
+        await callback.message.answer("Пользователь не найден в вашем списке.")
     else:
         text = format_tg_profile_card(detail)
         await callback.message.answer(
@@ -194,30 +202,34 @@ async def cb_tg_card(callback: CallbackQuery, callback_data: TgUserActionCallbac
             reply_markup=tg_user_card_keyboard(callback_data.tg_id, callback_data.src),
             disable_web_page_preview=True
         )
-    await callback.answer()
+
+
+@router.callback_query(TgUserActionCallback.filter(F.action == "profile"))
+async def cb_tg_profile_alias(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
+    await cb_tg_card(callback, callback_data)
 
 
 @router.callback_query(TgUserActionCallback.filter(F.action == "delete"))
 async def cb_tg_delete_confirm(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
+    await callback.answer()
     detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
     if detail:
         await callback.message.answer(
-            f"🗑️ Удалить Telegram-пользователя <b>{escape_html(build_tg_display_name(detail))}</b> из отслеживания?",
+            f"Удалить <b>{escape_html(build_tg_display_name(detail))}</b> из списка?",
             reply_markup=tg_delete_confirm_keyboard(callback_data.tg_id, callback_data.src),
         )
-    await callback.answer()
 
 
 @router.callback_query(TgDeleteConfirmCallback.filter())
 async def cb_tg_delete_perform(callback: CallbackQuery, callback_data: TgDeleteConfirmCallback) -> None:
+    await callback.answer()
     if callback_data.confirm:
         await db.remove_tg_tracked_user(callback.message.chat.id, callback_data.tg_id)
-        await callback.message.answer("✅ Пользователь [TG] удален из списка.")
+        await callback.message.answer("✅ Пользователь удален.")
         await callback.message.delete()
         await _show_tg_list(callback.message, source=callback_data.src)
     else:
         await callback.message.delete()
-    await callback.answer()
 
 
 @router.message(AddUserStates.waiting_for_tg_link)
@@ -271,6 +283,6 @@ async def process_tg_add_input(message: Message, state: FSMContext) -> None:
             "lookup_value": resolved.lookup_value,
         })
     except (TelegramResolverInvalidInputError, TelegramResolverNotFoundError, TelegramResolverPeerTypeError) as e:
-        await message.answer(f"❌ {str(e)}")
+        await message.answer(str(e))
     except TelegramResolverUnavailableError:
-        await message.answer("❌ Telegram-резолвер сейчас недоступен. Попробуйте позже.")
+        await message.answer("Telegram временно недоступен. Попробуйте позже.")

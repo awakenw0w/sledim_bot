@@ -662,7 +662,7 @@ async def _reconcile_tg_sessions_batched(chat_id: int, snapshot, now_ts: int, op
 async def run_telegram_monitor(bot: Bot) -> None:
     logger.info("Telegram-monitor запущен. Проверка статусов и профиля: раз в %s сек.", ONLINE_CHECK_INTERVAL)
     while True:
-        loop_started_at = time.time()
+        loop_started_at = time_mod.time()
         try:
             await _check_telegram_and_notify(bot)
         except asyncio.CancelledError:
@@ -671,5 +671,5 @@ async def run_telegram_monitor(bot: Bot) -> None:
         except Exception as exc:
             logger.exception("Ошибка в цикле Telegram-monitor: %s", exc)
 
-        sleep_for = max(ONLINE_CHECK_INTERVAL - (time.time() - loop_started_at), 0)
+        sleep_for = max(ONLINE_CHECK_INTERVAL - (time_mod.time() - loop_started_at), 0)
         await asyncio.sleep(sleep_for)
