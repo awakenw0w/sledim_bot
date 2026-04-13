@@ -23,6 +23,7 @@ from ui_keyboards import (
 )
 from ui_callbacks import NavCallback
 from ui_format import NOTIFICATION_MODE_LABELS, escape_html
+from .common import safe_answer_callback
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +53,6 @@ def _build_help_text(current_mode: str, change_settings: dict[str, bool]) -> str
         f"• <b>{BTN_GENERAL_REPORT}</b> — общие отчеты по платформе\n"
         f"• <b>{BTN_NOTIFY}</b> — настройки уведомлений\n"
         "• Данные ВКонтакте и Telegram не смешиваются\n\n"
-        "<b>Команды</b>\n"
-        "/start — открыть главное меню\n"
-        "/help — показать помощь\n"
-        "/add <code>ссылка</code> — добавить пользователя VK\n"
-        "/status <code>ссылка</code> — открыть карточку VK\n"
-        "/find <code>имя</code> — поиск по VK\n\n"
         f"Уведомления VK: <b>{NOTIFICATION_MODE_LABELS.get(current_mode, current_mode)}</b>\n"
         f"Включено по изменениям: <b>{escape_html(enabled_changes_text)}</b>\n"
         f"Выключено по изменениям: <b>{escape_html(disabled_changes_text)}</b>"
@@ -77,7 +72,8 @@ async def _show_main_menu(message: Message, text: str | None = None) -> None:
 
 async def _show_vk_menu(message: Message) -> None:
     await message.answer(
-        "<b>ВКонтакте</b>\n"
+        "Выбранная платформа: \n"
+        "🟦 Вконтакте\n"
         "Выберите действие.",
         reply_markup=platform_section_keyboard("vk"),
     )
@@ -85,7 +81,8 @@ async def _show_vk_menu(message: Message) -> None:
 
 async def _show_tg_menu(message: Message) -> None:
     await message.answer(
-        "<b>Telegram</b>\n"
+        "Выбранная платформа: \n"
+        "⬜️ Telegram\n"
         "Выберите действие.",
         reply_markup=platform_section_keyboard("tg"),
     )
@@ -118,7 +115,28 @@ async def _show_notifications_hub(message: Message) -> None:
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await _show_main_menu(message, text="Привет! Я помогаю следить за активностью и изменениями профиля во ВКонтакте и Telegram.")
+    await _show_main_menu(
+        message,
+        text=(
+            "👁 Привет. Я бот для мониторинга активности и изменений профиля.\n\n"
+            "<b>Что я умею:</b>\n"
+            "— отслеживать онлайн и офлайн\n"
+            "— сохранять историю активности\n"
+            "— отслеживать изменения профиля\n"
+            "— отправлять уведомления и показывать отчеты\n\n"
+            "<b>❗️ Важно:</b>\n"
+            "— статус онлайн обновляется примерно раз в 30 секунд\n"
+            "— изменения других параметров профиля проверяются примерно раз в 1 час\n\n"
+            "<b>❗️ Обратите внимание:</b>\n"
+            "бот фиксирует момент обнаружения изменения, поэтому время в отчетах может "
+            "отличаться от реального на небольшую величину.\n\n"
+            "<b>🔐 Конфиденциальность:</b>\n"
+            "бот хранит только данные, необходимые для работы функций мониторинга, отчетов "
+            "и уведомлений. Используя бота, вы подтверждаете согласие на обработку этих "
+            "данных в рамках работы сервиса.\n\n"
+            "Выберите нужный раздел в меню ниже:"
+        ),
+    )
 
 
 @router.message(Command("help"))
@@ -182,4 +200,4 @@ async def cb_nav(callback: CallbackQuery, callback_data: NavCallback, state: FSM
         # should not happen with the narrowed filter, but for safety:
         return
 
-    await callback.answer()
+    await safe_answer_callback(callback)

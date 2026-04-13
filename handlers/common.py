@@ -3,7 +3,7 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import Router, F
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ErrorEvent
 from aiogram.exceptions import TelegramBadRequest
 
 from config import REQUIRED_CHANNEL_ID, REQUIRED_CHANNEL_LINK
@@ -16,6 +16,26 @@ router = Router()
 
 ALLOWED_MEMBER_STATUSES = {"member", "administrator", "creator"}
 CHECK_SUBSCRIPTION_CALLBACK = "check_required_subscription"
+
+
+def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
+    message = str(exc).casefold()
+    return (
+        "query is too old" in message
+        or "query id is invalid" in message
+        or "response timeout expired" in message
+    )
+
+
+async def safe_answer_callback(callback: CallbackQuery, *args, **kwargs) -> bool:
+    try:
+        await callback.answer(*args, **kwargs)
+        return True
+    except TelegramBadRequest as exc:
+        if _is_stale_callback_error(exc):
+            logger.info("Игнорируем устаревший callback query: %s", callback.data)
+            return False
+        raise
 
 # --- Middlewares ---
 
@@ -50,7 +70,7 @@ class SubscriptionRequiredCallbackMiddleware(BaseMiddleware):
 
         if not await _has_required_subscription(data["bot"], event.from_user.id):
             await _send_subscription_required(event)
-            await event.answer()
+            await safe_answer_callback(event)
             return
 
         return await handler(event, data)
@@ -95,9 +115,25 @@ async def cb_check_subscription(callback: CallbackQuery) -> None:
         await callback.message.answer("✅ Готово. Теперь бот доступен.")
         await callback.message.delete()
     else:
-        await callback.answer("Вы еще не подписаны на канал.", show_alert=True)
+        await safe_answer_callback(callback, "Вы еще не подписаны на канал.", show_alert=True)
 
 
 @router.callback_query(F.data == "noop")
 async def cb_noop(callback: CallbackQuery) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
+
+
+@router.errors()
+async def cb_ignore_stale_callback_error(event: ErrorEvent) -> bool | None:
+    exc = event.exception
+    if not isinstance(exc, TelegramBadRequest):
+        return None
+    if not _is_stale_callback_error(exc):
+        return None
+
+    callback_data = None
+    if event.update.callback_query is not None:
+        callback_data = event.update.callback_query.data
+    logger.info("Пойман устаревший callback query, ошибка подавлена: %s", callback_data)
+    return True
+

@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from datetime import datetime
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
@@ -29,6 +30,7 @@ from ui_format import (
     build_relation_privacy_lines,
     get_vk_link_formats_text
 )
+from .common import safe_answer_callback
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,31 @@ router = Router()
 
 def _normalize_name(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def _build_vk_add_prompt_text() -> str:
+    return (
+        "<b>Добавление во ВКонтакте</b>\n"
+        "Отправьте ссылку, короткое имя или ID профиля.\n\n"
+        + get_vk_link_formats_text()
+    )
+
+
+def _build_vk_resolve_error_text(reason: str | None) -> str:
+    if reason == "invalid_input":
+        return "Не удалось распознать ссылку или ID. Проверьте ввод и попробуйте снова."
+    if reason == "application_blocked":
+        return (
+            "VK сейчас недоступен: приложение для VK API заблокировано.\n"
+            "Обновите <code>VK_ACCESS_TOKEN</code> и попробуйте снова."
+        )
+    if reason in {"api_error", "api_unavailable"}:
+        return "Не удалось связаться с VK API. Попробуйте чуть позже."
+    return "Не удалось найти пользователя. Проверьте ссылку или ID."
+
+
+async def _resolve_vk_user_from_input(raw_link: str) -> tuple[dict[str, Any] | None, str | None]:
+    return await vk_api.resolve_user_by_vk_link_verbose(raw_link)
 
 
 async def _load_current_users_map(vk_ids: list[int]) -> dict[int, dict]:
@@ -194,26 +221,24 @@ async def _perform_add_vk_user(message: Message, user: dict) -> None:
 
 @router.callback_query(NavCallback.filter(F.target == "vk_list"))
 async def cb_vk_list(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     await state.clear()
     await _show_vk_list(callback.message)
 
 
 @router.callback_query(NavCallback.filter(F.target == "vk_add"))
 async def cb_vk_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    await safe_answer_callback(callback)
     await state.set_state(AddUserStates.waiting_for_vk_link)
     await callback.message.answer(
-        "<b>Добавление во ВКонтакте</b>\n"
-        "Отправьте ссылку, короткое имя или ID профиля.\n\n"
-        + get_vk_link_formats_text(),
+        _build_vk_add_prompt_text(),
         reply_markup=back_main_inline_keyboard("vk_menu")
     )
-    await callback.answer()
 
 
 @router.callback_query(PageCallback.filter(F.source == "vk_list"))
 async def cb_vk_list_pagination(callback: CallbackQuery, callback_data: PageCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     # Удаляем старое сообщение или редактируем? Пользователь просил "не ломать UX".
     # Для лучшего UX при пагинации лучше редактировать текущее сообщение.
     await callback.message.delete()
@@ -222,13 +247,13 @@ async def cb_vk_list_pagination(callback: CallbackQuery, callback_data: PageCall
 
 @router.callback_query(UserActionCallback.filter(F.action == "card"))
 async def cb_vk_card(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     await _show_user_card(callback.message, callback_data.vk_id, callback_data.src)
 
 
 @router.callback_query(UserActionCallback.filter(F.action == "delete"))
 async def cb_vk_delete_confirm(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     snapshot = await _get_single_snapshot(callback.message.chat.id, callback_data.vk_id)
     if snapshot:
         await callback.message.answer(
@@ -239,7 +264,7 @@ async def cb_vk_delete_confirm(callback: CallbackQuery, callback_data: UserActio
 
 @router.callback_query(DeleteConfirmCallback.filter())
 async def cb_vk_delete_perform(callback: CallbackQuery, callback_data: DeleteConfirmCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     if callback_data.confirm:
         await db.remove_tracked_user(callback.message.chat.id, callback_data.vk_id)
         await callback.message.answer("✅ Пользователь удален.")
@@ -253,9 +278,9 @@ async def cb_vk_delete_perform(callback: CallbackQuery, callback_data: DeleteCon
 @router.message(AddUserStates.waiting_for_vk_link)
 async def process_vk_add_link(message: Message, state: FSMContext) -> None:
     raw_link = message.text.strip()
-    user = await vk_api.resolve_user_by_vk_link(raw_link)
+    user, reason = await _resolve_vk_user_from_input(raw_link)
     if not user:
-        await message.answer("Не удалось найти пользователя. Проверьте ссылку или ID.")
+        await message.answer(_build_vk_resolve_error_text(reason))
         return
 
     await state.clear()
@@ -266,14 +291,18 @@ async def process_vk_add_link(message: Message, state: FSMContext) -> None:
 async def cmd_add(message: Message, state: FSMContext) -> None:
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await cb_vk_add_prompt(None, state) # Имитируем вызов промпта
+        await state.set_state(AddUserStates.waiting_for_vk_link)
+        await message.answer(
+            _build_vk_add_prompt_text(),
+            reply_markup=back_main_inline_keyboard("vk_menu"),
+        )
         return
     
-    user = await vk_api.resolve_user_by_vk_link(parts[1])
+    user, reason = await _resolve_vk_user_from_input(parts[1])
     if user:
         await _perform_add_vk_user(message, user)
     else:
-        await message.answer("Пользователь не найден.")
+        await message.answer(_build_vk_resolve_error_text(reason))
 
 
 @router.message(Command("list"))
@@ -288,11 +317,11 @@ async def cmd_status(message: Message, state: FSMContext) -> None:
         await message.answer("Используйте: <code>/status ссылка</code> или <code>/status ID</code>.")
         return
     
-    user = await vk_api.resolve_user_by_vk_link(parts[1])
+    user, reason = await _resolve_vk_user_from_input(parts[1])
     if user:
         await _show_user_card(message, int(user["id"]), source="cmd")
     else:
-        await message.answer("Пользователь не найден.")
+        await message.answer(_build_vk_resolve_error_text(reason))
 
 
 @router.message(Command("find"))
@@ -322,7 +351,7 @@ async def cmd_remove(message: Message) -> None:
         await message.answer("Используйте: <code>/remove ссылка</code> или <code>/remove ID</code>.")
         return
     
-    user = await vk_api.resolve_user_by_vk_link(parts[1])
+    user, reason = await _resolve_vk_user_from_input(parts[1])
     if user:
         removed = await db.remove_tracked_user(message.chat.id, int(user["id"]))
         if removed:
@@ -330,4 +359,5 @@ async def cmd_remove(message: Message) -> None:
         else:
             await message.answer("Пользователь не найден в вашем списке.")
     else:
-        await message.answer("Не удалось найти пользователя.")
+        await message.answer(_build_vk_resolve_error_text(reason))
+

@@ -278,15 +278,15 @@ def build_tg_display_name(item: dict) -> str:
 
 
 def build_tg_button_label(item: dict) -> str:
-    username = str(item.get("username") or "").strip()
-    if username:
-        return f"@{username}"
-
     first_name = str(item.get("first_name") or "").strip()
     last_name = str(item.get("last_name") or "").strip()
     full_name = f"{first_name} {last_name}".strip()
     if full_name:
         return full_name
+
+    username = str(item.get("username") or "").strip()
+    if username:
+        return f"@{username}"
 
     return f"ID {item['telegram_user_id']}"
 
@@ -544,8 +544,7 @@ def format_vk_general_report_user_block(snapshot: dict, sessions: list[dict], da
     
     return "\n".join([
         f"<b>{escape_html(name)}</b>",
-        f"ID: <code>{snapshot['vk_id']}</code>",
-        f"Ссылка: <a href='{snapshot['profile_link']}'>{snapshot['profile_link']}</a>",
+        f"Ссылка на страницу: <a href='{escape_html(snapshot['profile_link'])}'>{escape_html(snapshot['profile_link'])}</a>",
         f"Заходов: <b>{len(sessions)}</b>",
         f"Онлайн: <b>{format_duration(total_duration)}</b>",
         f"Был в сети: {vk_api.format_last_seen(snapshot.get('last_seen'))}",
@@ -642,20 +641,22 @@ def format_tg_general_report_user_block(detail: dict, sessions: list[dict], days
     total_duration = sum(session_duration_for_period(session, since_ts, now_ts) for session in sessions)
     display_name = build_tg_display_name(detail)
     username = str(detail.get("username") or "").strip()
-    profile_link = str(detail.get("profile_link") or f"tg://user?id={int(detail['telegram_user_id'])}")
-    
-    lines = [
+    if detail.get("last_seen_at") is not None:
+        last_seen_text = vk_api.format_timestamp(int(detail["last_seen_at"]))
+    elif detail.get("activity_at") is not None:
+        last_seen_text = vk_api.format_timestamp(int(detail["activity_at"]))
+    else:
+        last_seen_text = "нет данных"
+
+    link_text = f"@{username}" if username else "не указан"
+
+    return "\n".join([
         f"<b>{escape_html(display_name)}</b>",
-        f"ID: <code>{detail['telegram_user_id']}</code>",
-        f"Статус: {escape_html(build_tg_status_label(detail))}",
-        build_tg_activity_line(detail),
+        f"Ссылка: {escape_html(link_text)}",
         f"Заходов: <b>{len(sessions)}</b>",
         f"Онлайн: <b>{format_duration(total_duration)}</b>",
-        f"Ссылка: <a href='{escape_html(profile_link)}'>{escape_html(profile_link)}</a>",
-    ]
-    if username:
-        lines.insert(2, f"Ник: <code>@{escape_html(username)}</code>")
-    return "\n".join(lines)
+        f"Был в сети: {escape_html(last_seen_text)}",
+    ])
 
 
 # --- Вспомогательные тексты и кнопки системных экранов ---

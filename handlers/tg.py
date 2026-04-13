@@ -37,6 +37,7 @@ from ui_format import (
     build_tg_status_label,
     build_tg_activity_line
 )
+from .common import safe_answer_callback
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +86,8 @@ async def _show_tg_list(message: Message, page: int = 1, source: str = "tg_list"
             f"ID: <code>{item['telegram_user_id']}</code>",
         ]
         if username:
-            user_lines.append(f"Ник: <code>@{escape_html(username)}</code>")
-        user_lines.append(f"В списке с: {format_added_at(item.get('added_at'))}")
+            user_lines.append(f"РќРёРє: <code>@{escape_html(username)}</code>")
+        user_lines.append(f"Р' СЃРїРёСЃРєРµ СЃ: {format_added_at(item.get('added_at'))}")
         lines.append("\n".join(user_lines))
 
     text = "\n\n".join(lines)
@@ -146,10 +147,10 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
         source_value=source_value,
     )
     display_name = build_tg_display_name(tg_user)
-    username_line = f"\nНик: <code>@{escape_html(username)}</code>" if username else ""
+    username_line = f"\nРќРёРє: <code>@{escape_html(username)}</code>" if username else ""
     result_prefix = "Пользователь добавлен" if added else "Пользователь уже в списке, данные обновлены"
     await message.answer(
-        f"✅ {result_prefix}\n"
+        f"вњ… {result_prefix}\n"
         f"<b>{escape_html(display_name)}</b>\n"
         f"ID: <code>{tg_user['telegram_user_id']}</code>{username_line}",
         reply_markup=main_menu_keyboard(),
@@ -160,13 +161,14 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
 
 @router.callback_query(NavCallback.filter(F.target == "tg_list"))
 async def cb_tg_list(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     await state.clear()
     await _show_tg_list(callback.message)
 
 
 @router.callback_query(NavCallback.filter(F.target == "tg_add"))
 async def cb_tg_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    await safe_answer_callback(callback)
     await state.set_state(AddUserStates.waiting_for_tg_link)
     await callback.message.answer(
         "<b>Добавление в Telegram</b>\n"
@@ -175,23 +177,21 @@ async def cb_tg_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
         "• <code>username</code>\n"
         "• <code>@username</code>\n"
         "• <code>t.me/username</code>\n"
-        "• <code>123456789</code>\n\n"
-        "Или выберите пользователя кнопкой ниже.",
+        "• <code>123456789</code>",
         reply_markup=tg_add_user_reply_keyboard(),
     )
-    await callback.answer()
 
 
 @router.callback_query(PageCallback.filter(F.source == "tg_list"))
 async def cb_tg_list_pagination(callback: CallbackQuery, callback_data: PageCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     await callback.message.delete()
     await _show_tg_list(callback.message, page=callback_data.page)
 
 
 @router.callback_query(TgUserActionCallback.filter(F.action == "card"))
 async def cb_tg_card(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
     if detail is None:
         await callback.message.answer("Пользователь не найден в вашем списке.")
@@ -211,7 +211,7 @@ async def cb_tg_profile_alias(callback: CallbackQuery, callback_data: TgUserActi
 
 @router.callback_query(TgUserActionCallback.filter(F.action == "delete"))
 async def cb_tg_delete_confirm(callback: CallbackQuery, callback_data: TgUserActionCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     detail = await db.get_tg_tracked_user_detail(callback.message.chat.id, callback_data.tg_id)
     if detail:
         await callback.message.answer(
@@ -222,7 +222,7 @@ async def cb_tg_delete_confirm(callback: CallbackQuery, callback_data: TgUserAct
 
 @router.callback_query(TgDeleteConfirmCallback.filter())
 async def cb_tg_delete_perform(callback: CallbackQuery, callback_data: TgDeleteConfirmCallback) -> None:
-    await callback.answer()
+    await safe_answer_callback(callback)
     if callback_data.confirm:
         await db.remove_tg_tracked_user(callback.message.chat.id, callback_data.tg_id)
         await callback.message.answer("✅ Пользователь удален.")
@@ -286,3 +286,4 @@ async def process_tg_add_input(message: Message, state: FSMContext) -> None:
         await message.answer(str(e))
     except TelegramResolverUnavailableError:
         await message.answer("Telegram временно недоступен. Попробуйте позже.")
+

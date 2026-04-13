@@ -63,7 +63,6 @@ async def main() -> None:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     except asyncio.CancelledError:
         logger.info("Получен запрос на остановку polling, начинаю завершение фоновых задач.")
-        raise
     finally:
         # При остановке (Ctrl+C или другой сигнал) отменяем задачи трекеров и воркера
         tracker_task.cancel()
@@ -79,5 +78,6 @@ async def main() -> None:
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Получен сигнал прерывания, завершение работы.")
+

@@ -41,6 +41,9 @@ BTN_ONLINE_REPORT = "📈 Онлайн"
 BTN_GENERAL_REPORT = "📊 Отчеты"
 BTN_GENERAL_REPORT_VK = "ВКонтакте"
 BTN_GENERAL_REPORT_TG = "Telegram"
+BTN_PLATFORM_MENU_ADD_USER = "➕Добавить пользователя"
+BTN_PLATFORM_MENU_TRACKED_LIST = "👁 Список отслеживаемых пользователей"
+BTN_PLATFORM_MENU_REPORT = "📈Общий отчёт"
 BTN_SEARCH = "🔎 Поиск"
 BTN_NOTIFY = "🔔 Уведомления"
 BTN_NOTIFY_VK = "ВКонтакте"
@@ -49,7 +52,7 @@ BTN_PROFILE_CHANGES = "📝 Изменения профиля"
 BTN_HELP = "Помощь"
 BTN_TG_PICK_USER = "👤 Выбрать в Telegram"
 BTN_BACK = "⬅️ Назад"
-BTN_MAIN_MENU = "🏠 Главное меню"
+BTN_MAIN_MENU = "🏠Главное меню"
 
 PERIOD_OPTIONS: list[tuple[str, int]] = [
     ("1 день", 1),
@@ -135,13 +138,13 @@ def platform_section_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     if platform == "vk":
-        builder.button(text=BTN_ADD_USER, callback_data=NavCallback(target="vk_add").pack())
-        builder.button(text=BTN_TRACKED_LIST, callback_data=NavCallback(target="vk_list").pack())
-        builder.button(text=BTN_GENERAL_REPORT_VK, callback_data=NavCallback(target="general_report_vk_period").pack())
+        builder.button(text=BTN_PLATFORM_MENU_ADD_USER, callback_data=NavCallback(target="vk_add").pack())
+        builder.button(text=BTN_PLATFORM_MENU_TRACKED_LIST, callback_data=NavCallback(target="vk_list").pack())
+        builder.button(text=BTN_PLATFORM_MENU_REPORT, callback_data=NavCallback(target="general_report_vk_period").pack())
     else:
-        builder.button(text=BTN_ADD_USER_TG, callback_data=NavCallback(target="tg_add").pack())
-        builder.button(text=BTN_TRACKED_LIST_TG, callback_data=NavCallback(target="tg_list").pack())
-        builder.button(text=BTN_GENERAL_REPORT_TG, callback_data=NavCallback(target="tg_general_report").pack())
+        builder.button(text=BTN_PLATFORM_MENU_ADD_USER, callback_data=NavCallback(target="tg_add").pack())
+        builder.button(text=BTN_PLATFORM_MENU_TRACKED_LIST, callback_data=NavCallback(target="tg_list").pack())
+        builder.button(text=BTN_PLATFORM_MENU_REPORT, callback_data=NavCallback(target="tg_general_report").pack())
 
     builder.adjust(1)
     builder.row(
@@ -182,19 +185,8 @@ def notifications_hub_keyboard() -> InlineKeyboardMarkup:
 
 
 def tg_add_user_reply_keyboard() -> ReplyKeyboardMarkup:
-    request_button = KeyboardButton(
-        text=BTN_TG_PICK_USER,
-        request_users=KeyboardButtonRequestUsers(
-            request_id=1001,
-            user_is_bot=False,
-            max_quantity=1,
-            request_name=True,
-            request_username=True,
-        ),
-    )
     return ReplyKeyboardMarkup(
         keyboard=[
-            [request_button],
             [KeyboardButton(text=BTN_BACK), KeyboardButton(text=BTN_MAIN_MENU)],
         ],
         resize_keyboard=True,

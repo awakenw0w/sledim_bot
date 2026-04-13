@@ -99,6 +99,23 @@ PROFILE_FIELD_LABELS = {
 }
 WALL_POST_TRACK_LIMIT = 100
 
+
+class VkApiError(RuntimeError):
+    """Base VK API exception used for detailed request diagnostics."""
+
+
+class VkApiTransportError(VkApiError):
+    """Raised when VK API request could not be completed at transport/protocol level."""
+
+
+class VkApiRequestError(VkApiError):
+    """Raised when VK API returns a structured error payload."""
+
+    def __init__(self, error_code: int | None, error_msg: str) -> None:
+        self.error_code = error_code
+        self.error_msg = error_msg
+        super().__init__(f"VK API error {error_code}: {error_msg}")
+
 RELATION_LABELS = {
     1: "не женат / не замужем",
     2: "есть друг / есть подруга",
@@ -190,22 +207,97 @@ def extract_vk_screen_name(value: str) -> str | None:
 
 
 async def resolve_user_by_vk_link(link: str) -> dict[str, Any] | None:
-    """Находит пользователя VK по ссылке, username, @username или числовому ID."""
+    user, _ = await resolve_user_by_vk_link_verbose(link)
+    return user
+
+
+def is_application_blocked_error(error_code: Any, error_msg: Any) -> bool:
+    try:
+        normalized_code = int(error_code)
+    except (TypeError, ValueError):
+        normalized_code = None
+
+    normalized_msg = str(error_msg or "").casefold()
+    return normalized_code == 8 and "application is blocked" in normalized_msg
+
+
+async def resolve_user_by_vk_link_verbose(link: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve a VK user by link and return a machine-readable failure reason."""
     screen_name = extract_vk_screen_name(link)
     if screen_name is None:
-        return None
+        return None, "invalid_input"
 
-    response_data = await _call_vk_api_response(
-        "users.get",
-        {
-            "user_ids": screen_name,
-            "fields": VK_USER_FIELDS_STR,
-        },
-    )
-    if not isinstance(response_data, list) or not response_data:
-        logger.error("VK API не вернул пользователя для ссылки %s. Ответ: %r", link, response_data)
-        return None
-    return response_data[0]
+    if not VK_ACCESS_TOKEN:
+        logger.error("resolve_user_by_vk_link(%s): VK_ACCESS_TOKEN is not configured", link)
+        return None, "api_unavailable"
+
+    request_params = {
+        "user_ids": screen_name,
+        "fields": VK_USER_FIELDS_STR,
+        "access_token": VK_ACCESS_TOKEN,
+        "v": VK_API_VERSION,
+    }
+    url = f"{VK_API_BASE}/users.get"
+
+    try:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+            async with session.get(url, params=request_params, ssl=SSL_CONTEXT) as response:
+                raw_text = await response.text()
+                if response.status != 200:
+                    logger.error(
+                        "VK API returned HTTP %s for resolve_user_by_vk_link(%s). Response: %s",
+                        response.status,
+                        link,
+                        raw_text[:1000],
+                    )
+                    return None, "api_unavailable"
+
+                try:
+                    data = await response.json(content_type=None)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to parse JSON for resolve_user_by_vk_link(%s): %s. Body: %s",
+                        link,
+                        exc,
+                        raw_text[:1000],
+                    )
+                    return None, "api_unavailable"
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        logger.error("Failed to execute resolve_user_by_vk_link(%s): %s", link, exc)
+        return None, "api_unavailable"
+
+    if not isinstance(data, dict):
+        logger.error("VK API returned unexpected payload for resolve_user_by_vk_link(%s): %r", link, data)
+        return None, "api_unavailable"
+
+    error = data.get("error")
+    if isinstance(error, dict):
+        error_code = error.get("error_code")
+        error_msg = str(error.get("error_msg") or "")
+        if is_application_blocked_error(error_code, error_msg):
+            logger.error(
+                "VK API unavailable for resolve_user_by_vk_link(%s): application is blocked (%s)",
+                link,
+                error_msg,
+            )
+            return None, "application_blocked"
+
+        logger.error(
+            "VK API returned an error for resolve_user_by_vk_link(%s): %s (%s)",
+            link,
+            error_code,
+            error_msg,
+        )
+        return None, "api_error"
+
+    response_data = data.get("response")
+    if not isinstance(response_data, list):
+        logger.error("VK API returned unexpected response type for link %s: %r", link, response_data)
+        return None, "api_unavailable"
+    if not response_data:
+        logger.info("VK user not found for link %s", link)
+        return None, "not_found"
+    return response_data[0], None
 
 
 def extract_last_seen_ts(user_data: dict[str, Any]) -> int | None:
