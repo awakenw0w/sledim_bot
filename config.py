@@ -4,10 +4,14 @@
 
 import logging
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-# Загружаем переменные из .env файла
-load_dotenv()
+# Загружаем переменные строго из .env рядом с проектом и
+# разрешаем им переопределять окружение процесса.
+ENV_PATH = Path(__file__).resolve().with_name(".env")
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 logger = logging.getLogger(__name__)
 
 # Токен Telegram-бота (получить у @BotFather)
