@@ -221,6 +221,24 @@ def is_application_blocked_error(error_code: Any, error_msg: Any) -> bool:
     return normalized_code == 8 and "application is blocked" in normalized_msg
 
 
+def is_authorization_failed_error(error_code: Any, error_msg: Any) -> bool:
+    try:
+        normalized_code = int(error_code)
+    except (TypeError, ValueError):
+        normalized_code = None
+
+    normalized_msg = str(error_msg or "").casefold()
+    return normalized_code == 5 and "authorization failed" in normalized_msg
+
+
+def is_expired_access_token_error(error_code: Any, error_msg: Any) -> bool:
+    if not is_authorization_failed_error(error_code, error_msg):
+        return False
+
+    normalized_msg = str(error_msg or "").casefold()
+    return "access_token has expired" in normalized_msg
+
+
 async def resolve_user_by_vk_link_verbose(link: str) -> tuple[dict[str, Any] | None, str | None]:
     """Resolve a VK user by link and return a machine-readable failure reason."""
     screen_name = extract_vk_screen_name(link)
@@ -281,6 +299,21 @@ async def resolve_user_by_vk_link_verbose(link: str) -> tuple[dict[str, Any] | N
                 error_msg,
             )
             return None, "application_blocked"
+
+        if is_expired_access_token_error(error_code, error_msg):
+            logger.error(
+                "VK API authorization failed for resolve_user_by_vk_link(%s): access token expired",
+                link,
+            )
+            return None, "token_expired"
+
+        if is_authorization_failed_error(error_code, error_msg):
+            logger.error(
+                "VK API authorization failed for resolve_user_by_vk_link(%s): %s",
+                link,
+                error_msg,
+            )
+            return None, "token_invalid"
 
         logger.error(
             "VK API returned an error for resolve_user_by_vk_link(%s): %s (%s)",

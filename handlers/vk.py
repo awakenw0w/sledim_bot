@@ -101,6 +101,16 @@ def _build_vk_resolve_error_text(reason: str | None) -> str:
             "VK сейчас недоступен: приложение для VK API заблокировано.\n"
             "Обновите <code>VK_ACCESS_TOKEN</code> и попробуйте снова."
         )
+    if reason == "token_expired":
+        return (
+            "Не удалось добавить пользователя: <code>VK_ACCESS_TOKEN</code> истёк.\n"
+            "Обновите токен в <code>.env</code> и перезапустите бота."
+        )
+    if reason == "token_invalid":
+        return (
+            "Не удалось добавить пользователя: VK отклонил <code>VK_ACCESS_TOKEN</code>.\n"
+            "Проверьте токен в <code>.env</code> и перезапустите бота."
+        )
     if reason in {"api_error", "api_unavailable"}:
         return "Не удалось связаться с VK API. Попробуйте чуть позже."
     return "Не удалось найти пользователя. Проверьте ссылку или ID."

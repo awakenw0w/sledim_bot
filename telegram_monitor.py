@@ -149,7 +149,7 @@ def _build_status_notification(snapshot, became_online: bool, detected_at: int) 
     lines = [
         f"{icon} <b>{_escape_html(display_name)}</b> {event_text}",
         f"🕐 Обнаружено: {_format_timestamp(detected_at)} (МСК)",
-        f"🔗 <a href='{_escape_html(profile_link)}'>Ссылка</a>",
+        f"🔗 <a href='{_escape_html(profile_link)}'>{_escape_html(profile_link)}</a>",
     ]
     return "\n".join(lines)
 
@@ -175,7 +175,7 @@ def _build_activity_notification(snapshot, old_status: dict | None, detected_at:
     lines = [
         f"🟢 <b>{_escape_html(display_name)}</b> вошёл в Telegram",
         f"🕐 Обнаружено: {_format_timestamp(detected_at)} (МСК)",
-        f"🔗 <a href='{_escape_html(profile_link)}'>Ссылка</a>",
+        f"🔗 <a href='{_escape_html(profile_link)}'>{_escape_html(profile_link)}</a>",
     ]
     return "\n".join(lines)
 
