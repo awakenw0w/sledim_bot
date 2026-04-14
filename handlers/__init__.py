@@ -12,6 +12,4 @@ router.include_router(tg.router)
 router.include_router(settings.router)
 router.include_router(reports.router)
 
-# Регистрация middleware для всего пакета хэндлеров
-router.message.middleware(common.SubscriptionRequiredMessageMiddleware())
-router.callback_query.middleware(common.SubscriptionRequiredCallbackMiddleware())
+# Обязательная подписка отключена: бот доступен без проверки канала.

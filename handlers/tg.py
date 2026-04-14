@@ -7,7 +7,6 @@ from aiogram.types import Message, CallbackQuery, SharedUser
 import db
 from telegram_resolver import (
     resolve_telegram_user,
-    normalize_telegram_lookup,
     TelegramResolverInvalidInputError,
     TelegramResolverNotFoundError,
     TelegramResolverPeerTypeError,
@@ -86,8 +85,8 @@ async def _show_tg_list(message: Message, page: int = 1, source: str = "tg_list"
             f"ID: <code>{item['telegram_user_id']}</code>",
         ]
         if username:
-            user_lines.append(f"РќРёРє: <code>@{escape_html(username)}</code>")
-        user_lines.append(f"Р' СЃРїРёСЃРєРµ СЃ: {format_added_at(item.get('added_at'))}")
+            user_lines.append(f"Ник: <code>@{escape_html(username)}</code>")
+        user_lines.append(f"В списке с: {format_added_at(item.get('added_at'))}")
         lines.append("\n".join(user_lines))
 
     text = "\n\n".join(lines)
@@ -119,6 +118,7 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
         avatar_has_video=bool(tg_user.get("avatar_has_video", False)),
         gifts_count=tg_user.get("gifts_count"),
         gifts_supported=tg_user.get("gifts_supported"),
+        bio=tg_user.get("bio"),
         is_bot=False,
     )
     await db.sync_tg_tracked_user_profile(
@@ -147,10 +147,10 @@ async def _perform_add_tg_user(message: Message, tg_user: dict) -> None:
         source_value=source_value,
     )
     display_name = build_tg_display_name(tg_user)
-    username_line = f"\nРќРёРє: <code>@{escape_html(username)}</code>" if username else ""
+    username_line = f"\nНик: <code>@{escape_html(username)}</code>" if username else ""
     result_prefix = "Пользователь добавлен" if added else "Пользователь уже в списке, данные обновлены"
     await message.answer(
-        f"вњ… {result_prefix}\n"
+        f"✅ {result_prefix}\n"
         f"<b>{escape_html(display_name)}</b>\n"
         f"ID: <code>{tg_user['telegram_user_id']}</code>{username_line}",
         reply_markup=main_menu_keyboard(),
@@ -275,6 +275,7 @@ async def process_tg_add_input(message: Message, state: FSMContext) -> None:
             "avatar_has_video": resolved.avatar_has_video,
             "gifts_count": resolved.gifts_count,
             "gifts_supported": resolved.gifts_supported,
+            "bio": resolved.bio,
             "status_text": resolved.status_text,
             "last_seen_at": resolved.last_seen_at,
             "is_online": resolved.is_online,
@@ -282,8 +283,18 @@ async def process_tg_add_input(message: Message, state: FSMContext) -> None:
             "activity_at": resolved.activity_at,
             "lookup_value": resolved.lookup_value,
         })
-    except (TelegramResolverInvalidInputError, TelegramResolverNotFoundError, TelegramResolverPeerTypeError) as e:
-        await message.answer(str(e))
+    except TelegramResolverInvalidInputError:
+        await message.answer(
+            "Не удалось распознать пользователя.\n"
+            "Отправьте username, @username, ссылку t.me/... или числовой ID."
+        )
+    except TelegramResolverNotFoundError:
+        await message.answer("Не удалось найти Telegram-пользователя по указанным данным.")
+    except TelegramResolverPeerTypeError:
+        await message.answer(
+            "Указанный адрес относится не к обычному пользователю Telegram.\n"
+            "Сейчас отслеживание доступно только для пользовательских аккаунтов."
+        )
     except TelegramResolverUnavailableError:
-        await message.answer("Telegram временно недоступен. Попробуйте позже.")
+        await message.answer("Telegram-резолвер сейчас недоступен. Попробуйте позже.")
 

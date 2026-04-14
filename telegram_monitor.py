@@ -87,11 +87,11 @@ def _build_display_name(snapshot, fallback: dict | None = None) -> str:
         last_name = last_name or _string_or_none(fallback.get("last_name"))
         username = username or _normalize_username(fallback.get("username"))
 
+    if username:
+        return f"@{username}"
     full_name = f"{first_name or ''} {last_name or ''}".strip()
     if full_name:
         return full_name
-    if username:
-        return f"@{username}"
 
     telegram_user_id = getattr(snapshot, "telegram_user_id", None)
     if telegram_user_id is None and fallback is not None:
@@ -126,6 +126,9 @@ def _format_profile_change_value(change_type: str, value: str | None) -> str:
 
     if change_type == "gifts":
         return f"{normalized} подарков" if normalized is not None else "нет данных"
+
+    if change_type == "bio":
+        return normalized or "описание удалено"
 
     return normalized or "не указано"
 
@@ -217,10 +220,11 @@ def _build_profile_change_records(old_known_user: dict | None, snapshot) -> list
         return []
 
     changes: list[dict] = []
+    names_hidden_due_to_contact = bool(getattr(snapshot, "names_hidden_due_to_contact", False))
 
     old_first_name = _string_or_none(old_known_user.get("first_name"))
     new_first_name = _string_or_none(snapshot.first_name)
-    if old_first_name != new_first_name:
+    if not names_hidden_due_to_contact and old_first_name != new_first_name:
         changes.append(
             {
                 "change_type": "first_name",
@@ -231,7 +235,7 @@ def _build_profile_change_records(old_known_user: dict | None, snapshot) -> list
 
     old_last_name = _string_or_none(old_known_user.get("last_name"))
     new_last_name = _string_or_none(snapshot.last_name)
-    if old_last_name != new_last_name:
+    if not names_hidden_due_to_contact and old_last_name != new_last_name:
         changes.append(
             {
                 "change_type": "last_name",

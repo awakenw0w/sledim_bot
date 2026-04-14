@@ -59,6 +59,7 @@ class ResolvedTelegramUser:
     username: str | None
     first_name: str | None
     last_name: str | None
+    names_hidden_due_to_contact: bool
     is_bot: bool
     avatar_photo_id: str | None
     avatar_dc_id: int | None
@@ -180,14 +181,25 @@ def _to_resolved_user(
     gifts_count, gifts_supported = _build_gifts_payload(full_user)
     bio = _build_bio_payload(full_user)
     username = (getattr(user, "username", None) or "").strip() or None
+    names_hidden_due_to_contact = bool(getattr(user, "contact", False))
+    first_name = (getattr(user, "first_name", None) or "").strip() or None
+    last_name = (getattr(user, "last_name", None) or "").strip() or None
+
+    # Если пользователь есть в контактах userbot-сессии, Telegram может вернуть
+    # локальное имя контакта владельца сессии. Не показываем такие имена другим людям.
+    if names_hidden_due_to_contact:
+        first_name = None
+        last_name = None
+
     profile_link = f"https://t.me/{username}" if username else f"tg://user?id={int(user.id)}"
 
     return ResolvedTelegramUser(
         telegram_user_id=int(user.id),
         access_hash=int(user.access_hash) if getattr(user, "access_hash", None) is not None else None,
         username=username,
-        first_name=(getattr(user, "first_name", None) or "").strip() or None,
-        last_name=(getattr(user, "last_name", None) or "").strip() or None,
+        first_name=first_name,
+        last_name=last_name,
+        names_hidden_due_to_contact=names_hidden_due_to_contact,
         is_bot=bool(getattr(user, "bot", False)),
         avatar_photo_id=avatar_photo_id,
         avatar_dc_id=avatar_dc_id,

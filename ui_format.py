@@ -269,24 +269,24 @@ def build_tg_display_name(item: dict) -> str:
     first_name = str(item.get("first_name") or "").strip()
     last_name = str(item.get("last_name") or "").strip()
     username = str(item.get("username") or "").strip()
+    if username:
+        return f"@{username}"
     full_name = f"{first_name} {last_name}".strip()
     if full_name:
         return full_name
-    if username:
-        return f"@{username}"
     return f"ID {item['telegram_user_id']}"
 
 
 def build_tg_button_label(item: dict) -> str:
+    username = str(item.get("username") or "").strip()
+    if username:
+        return f"@{username}"
+
     first_name = str(item.get("first_name") or "").strip()
     last_name = str(item.get("last_name") or "").strip()
     full_name = f"{first_name} {last_name}".strip()
     if full_name:
         return full_name
-
-    username = str(item.get("username") or "").strip()
-    if username:
-        return f"@{username}"
 
     return f"ID {item['telegram_user_id']}"
 
@@ -566,12 +566,13 @@ def format_tg_profile_card(detail: dict) -> str:
         build_tg_activity_line(detail),
         f"В списке с: {format_added_at(detail.get('added_at'))}",
     ]
-    if detail.get("first_name"):
-        lines.append(f"Имя: {escape_html(str(detail['first_name']))}")
-    if detail.get("last_name"):
-        lines.append(f"Фамилия: {escape_html(str(detail['last_name']))}")
     if username:
         lines.append(f"Ник: <code>@{escape_html(username)}</code>")
+    else:
+        if detail.get("first_name"):
+            lines.append(f"Имя: {escape_html(str(detail['first_name']))}")
+        if detail.get("last_name"):
+            lines.append(f"Фамилия: {escape_html(str(detail['last_name']))}")
     if detail.get("profile_link"):
         lines.append(f"Ссылка: <a href='{escape_html(str(detail['profile_link']))}'>{escape_html(str(detail['profile_link']))}</a>")
     if detail.get("avatar_photo_id"):
