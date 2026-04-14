@@ -3,6 +3,8 @@ __pycache__/
 .env
 bot_database.db
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.session
 *.session-journal

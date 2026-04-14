@@ -132,6 +132,13 @@ async def cb_nav_tg_gen_report_period(callback: CallbackQuery) -> None:
     await callback.message.delete()
 
 
+@router.callback_query(NavCallback.filter(F.target == "report_users"))
+async def cb_nav_vk_report_users(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await _show_vk_online_report_user_picker(callback)
+    await callback.message.delete()
+
+
 @router.callback_query(UserActionCallback.filter(F.action == "report"))
 async def cb_vk_report_menu(callback: CallbackQuery, callback_data: UserActionCallback) -> None:
     await callback.answer()

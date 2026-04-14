@@ -11,10 +11,10 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Токен Telegram-бота (получить у @BotFather)
-TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "8675165649:AAEL62eT8agqHocWliVeDZ55-5kbAjOTZVA")
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 # Токен доступа VK API (сервисный ключ приложения или токен пользователя)
-VK_ACCESS_TOKEN: str = os.getenv("VK_ACCESS_TOKEN", "vk1.a.-9XzQ9WFnEB1Oq-FHivf_gt53J24bPGSgdJejDAVMY2O7sIiS2YrFz_dfRFHg6W_13gGOhTQe7T57wkEYSqO63H2qe4-AJDUaADkO4e_Rcy2OSRrX2h_H5Giij4Ts0DVM-mYmq6aCDe2MeAEvADJ99eXNwaG1ndlxCH0-eaBY2dZK0OQq1MfGKunuMX_liwByufmqrglGxM5KLmj4wf-UQ")
+VK_ACCESS_TOKEN: str = os.getenv("VK_ACCESS_TOKEN", "").strip()
 
 # Версия VK API
 VK_API_VERSION: str = os.getenv("VK_API_VERSION", "5.131")
@@ -45,9 +45,9 @@ CHECK_INTERVAL: int = ONLINE_CHECK_INTERVAL
 # недостаточно для проверки подписки через Bot API.
 REQUIRED_CHANNEL_LINK: str = os.getenv(
     "REQUIRED_CHANNEL_LINK",
-    "https://t.me/+wAHMwnsycOljNjA6",
-)
-REQUIRED_CHANNEL_ID_RAW: str = os.getenv("REQUIRED_CHANNEL_ID", "-1003957805588").strip()
+    "",
+).strip()
+REQUIRED_CHANNEL_ID_RAW: str = os.getenv("REQUIRED_CHANNEL_ID", "").strip()
 
 REQUIRED_CHANNEL_ID: int | None = None
 if REQUIRED_CHANNEL_ID_RAW:

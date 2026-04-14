@@ -83,6 +83,110 @@ PROFILE_CACHE_FIELDS = (
     "quotes",
 )
 
+_TG_KNOWN_USER_UNSET = object()
+_TG_KNOWN_USER_COLUMNS = (
+    "telegram_user_id",
+    "username",
+    "first_name",
+    "last_name",
+    "access_hash",
+    "profile_link",
+    "avatar_photo_id",
+    "avatar_dc_id",
+    "avatar_has_video",
+    "gifts_count",
+    "gifts_supported",
+    "bio",
+    "is_bot",
+)
+
+
+def _normalize_tg_username(value: object | None) -> str | None:
+    return str(value or "").strip().lstrip("@") or None
+
+
+def _normalize_optional_text(value: object | None) -> str | None:
+    return str(value or "").strip() or None
+
+
+def _normalize_optional_flag(value: object | None) -> int | None:
+    if value is None:
+        return None
+    return 1 if bool(value) else 0
+
+
+def _normalize_required_flag(value: object | None, default: bool = False) -> int:
+    if value is None:
+        return 1 if default else 0
+    return 1 if bool(value) else 0
+
+
+def _build_tg_known_user_row(user_data: dict, existing: dict | None = None) -> tuple:
+    merged = dict(existing or {})
+    merged["telegram_user_id"] = int(user_data["telegram_user_id"])
+
+    if "username" in user_data:
+        merged["username"] = _normalize_tg_username(user_data.get("username"))
+    elif "username" not in merged:
+        merged["username"] = None
+
+    if "first_name" in user_data:
+        merged["first_name"] = _normalize_optional_text(user_data.get("first_name"))
+    elif "first_name" not in merged:
+        merged["first_name"] = None
+
+    if "last_name" in user_data:
+        merged["last_name"] = _normalize_optional_text(user_data.get("last_name"))
+    elif "last_name" not in merged:
+        merged["last_name"] = None
+
+    if "access_hash" in user_data:
+        merged["access_hash"] = user_data.get("access_hash")
+    elif "access_hash" not in merged:
+        merged["access_hash"] = None
+
+    if "profile_link" in user_data:
+        merged["profile_link"] = _normalize_optional_text(user_data.get("profile_link"))
+    elif "profile_link" not in merged:
+        merged["profile_link"] = None
+
+    if "avatar_photo_id" in user_data:
+        merged["avatar_photo_id"] = _normalize_optional_text(user_data.get("avatar_photo_id"))
+    elif "avatar_photo_id" not in merged:
+        merged["avatar_photo_id"] = None
+
+    if "avatar_dc_id" in user_data:
+        merged["avatar_dc_id"] = user_data.get("avatar_dc_id")
+    elif "avatar_dc_id" not in merged:
+        merged["avatar_dc_id"] = None
+
+    if "avatar_has_video" in user_data:
+        merged["avatar_has_video"] = _normalize_required_flag(user_data.get("avatar_has_video"))
+    else:
+        merged["avatar_has_video"] = _normalize_required_flag(merged.get("avatar_has_video"))
+
+    if "gifts_count" in user_data:
+        merged["gifts_count"] = user_data.get("gifts_count")
+    elif "gifts_count" not in merged:
+        merged["gifts_count"] = None
+
+    if "gifts_supported" in user_data:
+        merged["gifts_supported"] = _normalize_optional_flag(user_data.get("gifts_supported"))
+    else:
+        merged["gifts_supported"] = _normalize_optional_flag(merged.get("gifts_supported"))
+
+    if "bio" in user_data:
+        merged["bio"] = _normalize_optional_text(user_data.get("bio"))
+    elif "bio" not in merged:
+        merged["bio"] = None
+
+    if "is_bot" in user_data:
+        merged["is_bot"] = _normalize_required_flag(user_data.get("is_bot"))
+    else:
+        merged["is_bot"] = _normalize_required_flag(merged.get("is_bot"))
+
+    return tuple(merged[column_name] for column_name in _TG_KNOWN_USER_COLUMNS)
+
 
 async def _ensure_column(db: aiosqlite.Connection, table_name: str, column_name: str, ddl: str) -> None:
     async with db.execute(f"PRAGMA table_info({table_name})") as cursor:
@@ -596,25 +700,49 @@ async def sync_multiple_tg_tracked_user_profiles(users_data: list[dict]) -> None
 
 async def upsert_tg_known_user(
     telegram_user_id: int,
-    username: str | None = None,
-    first_name: str | None = None,
-    last_name: str | None = None,
-    access_hash: int | None = None,
-    profile_link: str | None = None,
-    avatar_photo_id: str | None = None,
-    avatar_dc_id: int | None = None,
-    avatar_has_video: bool = False,
-    gifts_count: int | None = None,
-    gifts_supported: bool | None = None,
-    bio: str | None = None,
-    is_bot: bool = False,
+    username: str | None | object = _TG_KNOWN_USER_UNSET,
+    first_name: str | None | object = _TG_KNOWN_USER_UNSET,
+    last_name: str | None | object = _TG_KNOWN_USER_UNSET,
+    access_hash: int | None | object = _TG_KNOWN_USER_UNSET,
+    profile_link: str | None | object = _TG_KNOWN_USER_UNSET,
+    avatar_photo_id: str | None | object = _TG_KNOWN_USER_UNSET,
+    avatar_dc_id: int | None | object = _TG_KNOWN_USER_UNSET,
+    avatar_has_video: bool | object = _TG_KNOWN_USER_UNSET,
+    gifts_count: int | None | object = _TG_KNOWN_USER_UNSET,
+    gifts_supported: bool | None | object = _TG_KNOWN_USER_UNSET,
+    bio: str | None | object = _TG_KNOWN_USER_UNSET,
+    is_bot: bool | object = _TG_KNOWN_USER_UNSET,
 ) -> None:
     """Сохраняет или обновляет известного Telegram-пользователя, которого бот уже видел."""
-    normalized_username = (username or "").strip().lstrip("@") or None
-    normalized_first_name = (first_name or "").strip() or None
-    normalized_last_name = (last_name or "").strip() or None
-    normalized_profile_link = (profile_link or "").strip() or None
-    normalized_avatar_photo_id = (avatar_photo_id or "").strip() or None
+    existing = await get_tg_known_user_by_id(telegram_user_id)
+    user_data = {"telegram_user_id": telegram_user_id}
+
+    if username is not _TG_KNOWN_USER_UNSET:
+        user_data["username"] = username
+    if first_name is not _TG_KNOWN_USER_UNSET:
+        user_data["first_name"] = first_name
+    if last_name is not _TG_KNOWN_USER_UNSET:
+        user_data["last_name"] = last_name
+    if access_hash is not _TG_KNOWN_USER_UNSET:
+        user_data["access_hash"] = access_hash
+    if profile_link is not _TG_KNOWN_USER_UNSET:
+        user_data["profile_link"] = profile_link
+    if avatar_photo_id is not _TG_KNOWN_USER_UNSET:
+        user_data["avatar_photo_id"] = avatar_photo_id
+    if avatar_dc_id is not _TG_KNOWN_USER_UNSET:
+        user_data["avatar_dc_id"] = avatar_dc_id
+    if avatar_has_video is not _TG_KNOWN_USER_UNSET:
+        user_data["avatar_has_video"] = avatar_has_video
+    if gifts_count is not _TG_KNOWN_USER_UNSET:
+        user_data["gifts_count"] = gifts_count
+    if gifts_supported is not _TG_KNOWN_USER_UNSET:
+        user_data["gifts_supported"] = gifts_supported
+    if bio is not _TG_KNOWN_USER_UNSET:
+        user_data["bio"] = bio
+    if is_bot is not _TG_KNOWN_USER_UNSET:
+        user_data["is_bot"] = is_bot
+
+    row_data = _build_tg_known_user_row(user_data, existing)
 
     async with get_db_connection() as db:
         await db.execute(
@@ -639,7 +767,7 @@ async def upsert_tg_known_user(
                 username = excluded.username,
                 first_name = excluded.first_name,
                 last_name = excluded.last_name,
-                access_hash = COALESCE(excluded.access_hash, tg_known_users.access_hash),
+                access_hash = excluded.access_hash,
                 profile_link = excluded.profile_link,
                 avatar_photo_id = excluded.avatar_photo_id,
                 avatar_dc_id = excluded.avatar_dc_id,
@@ -650,21 +778,7 @@ async def upsert_tg_known_user(
                 is_bot = excluded.is_bot,
                 updated_at = datetime('now')
             """,
-            (
-                telegram_user_id,
-                normalized_username,
-                normalized_first_name,
-                normalized_last_name,
-                access_hash,
-                normalized_profile_link,
-                normalized_avatar_photo_id,
-                avatar_dc_id,
-                1 if avatar_has_video else 0,
-                gifts_count,
-                None if gifts_supported is None else (1 if gifts_supported else 0),
-                (bio or "").strip() or None,
-                1 if is_bot else 0,
-            ),
+            row_data,
         )
         await db.commit()
 
@@ -673,26 +787,13 @@ async def save_multiple_tg_known_users(users_data: list[dict]) -> None:
     """Пакетно сохраняет или обновляет известных Telegram-пользователей."""
     if not users_data:
         return
-        
-    data_to_insert = []
-    for u in users_data:
-        uid = int(u["telegram_user_id"])
-        uname = (u.get("username") or "").strip().lstrip("@") or None
-        fname = (u.get("first_name") or "").strip() or None
-        lname = (u.get("last_name") or "").strip() or None
-        access_hash = u.get("access_hash")
-        plink = (u.get("profile_link") or "").strip() or None
-        aphid = (u.get("avatar_photo_id") or "").strip() or None
-        adcid = u.get("avatar_dc_id")
-        ahvid = 1 if u.get("avatar_has_video") else 0
-        gcnt = u.get("gifts_count")
-        gsupp = None if u.get("gifts_supported") is None else (1 if u.get("gifts_supported") else 0)
-        bio = (u.get("bio") or "").strip() or None
-        is_bot = 1 if u.get("is_bot") else 0
-        
-        data_to_insert.append((
-            uid, uname, fname, lname, access_hash, plink, aphid, adcid, ahvid, gcnt, gsupp, bio, is_bot
-        ))
+
+    telegram_user_ids = [int(u["telegram_user_id"]) for u in users_data]
+    existing_map = await get_multiple_tg_known_users_by_id(telegram_user_ids)
+    data_to_insert = [
+        _build_tg_known_user_row(u, existing_map.get(int(u["telegram_user_id"])))
+        for u in users_data
+    ]
 
     async with get_db_connection() as db:
         await db.executemany("""
@@ -705,7 +806,7 @@ async def save_multiple_tg_known_users(users_data: list[dict]) -> None:
                 username = excluded.username,
                 first_name = excluded.first_name,
                 last_name = excluded.last_name,
-                access_hash = COALESCE(excluded.access_hash, tg_known_users.access_hash),
+                access_hash = excluded.access_hash,
                 profile_link = excluded.profile_link,
                 avatar_photo_id = excluded.avatar_photo_id,
                 avatar_dc_id = excluded.avatar_dc_id,

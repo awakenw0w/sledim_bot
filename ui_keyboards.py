@@ -111,18 +111,34 @@ def _strip_report_source(source: str) -> str:
     return source
 
 
+def _normalize_nav_source(source: str) -> str:
+    normalized = _strip_report_source(source)
+    if normalized.startswith("c"):
+        return normalized[1:]
+    return normalized
+
+
 def _source_back_nav_target(source: str) -> str:
-    base_source = _strip_report_source(source)
-    if base_source in {"srh", "csrh"}:
+    base_source = _normalize_nav_source(source)
+    if base_source == "srh":
         return "search_results"
-    if base_source in {"orp", "corp"}:
+    if base_source == "orp":
         return "report_users"
-    return "list"
+    if base_source == "vk_list":
+        return "vk_list"
+    if base_source == "tg_list":
+        return "tg_list"
+    if base_source == "cmd":
+        return "vk_menu"
+    return "main"
 
 
 def _list_back_nav_target(source: str) -> str:
-    if source == "srh":
+    base_source = _normalize_nav_source(source)
+    if base_source == "srh":
         return "search_prompt"
+    if base_source == "tg_list":
+        return "tg_menu"
     return "vk_menu"
 
 

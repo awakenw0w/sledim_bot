@@ -430,7 +430,7 @@ async def _sync_relation_list(vk_id: int, list_type: str, old_profile: dict | No
     if expected_count is None:
         expected_count = previous_meta_count
 
-    current_snapshot = await vk_api.get_relation_snapshot(vk_id, list_type, expected_count)
+    current_snapshot = prefetch_snapshot or await vk_api.get_relation_snapshot(vk_id, list_type, expected_count)
     snapshot_count = _normalize_count(current_snapshot.get("count"))
     if snapshot_count is not None:
         profile_snapshot[count_field] = snapshot_count
@@ -541,7 +541,7 @@ async def _ensure_relation_snapshot_baseline(vk_id: int, list_type: str, current
 
 async def _sync_wall_posts(vk_id: int, prefetch_snapshot: dict | None = None) -> tuple[list[dict], int | None]:
     previous_meta = await db.get_wall_post_meta(vk_id)
-    current_snapshot = await vk_api.get_recent_wall_posts(vk_id)
+    current_snapshot = prefetch_snapshot or await vk_api.get_recent_wall_posts(vk_id)
     current_total_count = _normalize_count(current_snapshot.get("count"))
 
     if not current_snapshot.get("available"):

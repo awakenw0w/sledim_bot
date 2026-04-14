@@ -768,9 +768,9 @@ def _process_relation_response(response_data: Any, list_type: str, expected_coun
         if normalized_item is not None:
             normalized_items.append(normalized_item)
 
-    # Если мы получили меньше, чем total_count, значит нужно было пагинировать, 
-    # но в батче execute мы этого не делаем. Помечаем как неполный если разница существенна.
-    is_complete = len(normalized_items) >= total_count or len(normalized_items) >= RELATION_LIST_BATCH_SIZES[list_type]
+    # Батч execute запрашивает только первую страницу, поэтому список можно считать
+    # полным только если реально получили все элементы.
+    is_complete = total_count == 0 or len(normalized_items) >= total_count
 
     return {
         "count": total_count,
